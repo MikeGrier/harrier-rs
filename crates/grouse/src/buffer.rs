@@ -52,6 +52,14 @@ pub enum BufferError {
     /// `line` is the 0-based line number requested; `total` is the number of
     /// lines in the file (exact at this point).
     LineOutOfRange { line: usize, total: usize },
+
+    /// The [`View`] passed to [`Buffer::apply_edit`] was created from a
+    /// previous branch state and is no longer valid against the buffer's
+    /// current branch.
+    ///
+    /// Re-create the view (e.g. via [`Buffer::view_range`] or
+    /// [`Buffer::line_content`]) after any structural edit and retry.
+    StaleView,
 }
 
 impl std::fmt::Display for BufferError {
@@ -65,6 +73,10 @@ impl std::fmt::Display for BufferError {
             BufferError::LineOutOfRange { line, total } => {
                 write!(f, "line {line} is out of range (file has {total} lines)")
             }
+            BufferError::StaleView => write!(
+                f,
+                "View was created from a stale branch state; re-create it after the previous edit"
+            ),
         }
     }
 }
@@ -284,28 +296,8 @@ impl Buffer {
         let map =
             build_offset_map(self.branch.as_ref(), byte_range.clone()).map_err(BufferError::Io)?;
 
-        // Normalise CR/CRLF → LF.
-        let mut normalised = Vec::with_capacity(len as usize);
-        let mut i = 0;
-        while i < raw.len() {
-            match raw[i] {
-                b'\r' => {
-                    normalised.push(b'\n');
-                    if i + 1 < raw.len() && raw[i + 1] == b'\n' {
-                        i += 2;
-                    } else {
-                        i += 1;
-                    }
-                }
-                b => {
-                    normalised.push(b);
-                    i += 1;
-                }
-            }
-        }
-
         Ok(View::new(
-            normalised,
+            raw,
             map,
             Arc::clone(&self.branch),
             byte_range.start,
@@ -351,24 +343,42 @@ impl Buffer {
             build_offset_map(self.branch.as_ref(), byte_range.clone()).map_err(BufferError::Io)?;
 
         // Normalise CR/CRLF → LF.
-        let mut normalised = Vec::with_capacity(len as usize);
-        let mut i = 0;
-        while i < raw.len() {
-            match raw[i] {
-                b'\r' => {
-                    normalised.push(b'\n');
-                    if i + 1 < raw.len() && raw[i + 1] == b'\n' {
-                        i += 2;
-                    } else {
+        //
+        // Byte-level rewriting is only safe for ASCII-compatible encodings,
+        // where `\r` (0x0D) and `\n` (0x0A) appear as standalone single bytes
+        // and never as part of a multi-byte code unit.  For multi-byte
+        // encodings such as UTF-16LE/BE a CRLF code-unit pair is encoded as
+        // e.g. `0D 00 0A 00`, and rewriting individual `0x0D`/`0x0A` bytes
+        // would produce invalid sequences and corrupt the resulting `View`.
+        //
+        // For non-ASCII-compatible encodings we leave the bytes untouched;
+        // callers that need normalised line endings on multi-byte sources
+        // must decode through the encoding first.
+        let ascii_compatible =
+            self.encoding == encoding_rs::UTF_8 || self.encoding.is_single_byte();
+        let normalised = if ascii_compatible {
+            let mut out = Vec::with_capacity(raw.len());
+            let mut i = 0;
+            while i < raw.len() {
+                match raw[i] {
+                    b'\r' => {
+                        out.push(b'\n');
+                        if i + 1 < raw.len() && raw[i + 1] == b'\n' {
+                            i += 2;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    b => {
+                        out.push(b);
                         i += 1;
                     }
                 }
-                b => {
-                    normalised.push(b);
-                    i += 1;
-                }
             }
-        }
+            out
+        } else {
+            raw
+        };
 
         Ok(View::new(
             normalised,
@@ -380,13 +390,34 @@ impl Buffer {
 
     // ── MA-57: structural line operations ─────────────────────────────────────
 
-    /// The source line-ending bytes for this buffer (LF, CRLF, or CR).
-    fn terminator_bytes(&self) -> &'static [u8] {
-        match self.line_ending {
-            LineEnding::Lf => b"\n",
-            LineEnding::CrLf => b"\r\n",
-            LineEnding::Cr => b"\r",
-        }
+    /// The source line-ending bytes for this buffer (LF, CRLF, or CR),
+    /// encoded in the buffer's source encoding.
+    ///
+    /// For ASCII-compatible encodings (UTF-8, ISO-8859-*, Windows-125*, etc.)
+    /// this is just the raw `\n` / `\r\n` / `\r` bytes.  For multi-byte
+    /// encodings such as UTF-16LE/BE the terminator is encoded into the
+    /// source encoding so that inserts produced by `split_line` /
+    /// `insert_line` / `append_line` do not corrupt the file by mixing
+    /// encodings.
+    fn terminator_bytes(&self) -> Vec<u8> {
+        let s: &str = match self.line_ending {
+            LineEnding::Lf => "\n",
+            LineEnding::CrLf => "\r\n",
+            LineEnding::Cr => "\r",
+        };
+
+        // Fast path: ASCII-compatible single-byte-per-ASCII-char encodings
+        // produce identical bytes to the UTF-8 representation for `\n`/`\r`.
+        // `encoding_rs` handles this correctly for UTF-16 (LE/BE) and any
+        // other multi-byte encoding by emitting the proper code units.
+        let mut encoder = self.encoding.new_encoder();
+        let max_len = encoder
+            .max_buffer_length_from_utf8_without_replacement(s.len())
+            .unwrap_or(s.len() * 4);
+        let mut out = Vec::with_capacity(max_len);
+        let (_result, _read) =
+            encoder.encode_from_utf8_to_vec_without_replacement(s, &mut out, true);
+        out
     }
 
     /// Replace the buffer's branch with `new_branch` and rebuild the line map.
@@ -464,6 +495,8 @@ impl Buffer {
     ///
     /// # Errors
     ///
+    /// - [`BufferError::StaleView`] if `view` was created from a previous
+    ///   branch state (i.e. an edit has occurred since the view was made).
     /// - [`BufferError::Io`] on branch edit failure.
     pub fn apply_edit(
         &mut self,
@@ -471,6 +504,12 @@ impl Buffer {
         normalised_range: Range<u64>,
         replacement: &[u8],
     ) -> Result<(), BufferError> {
+        // Reject views created from an older branch state.  Without this
+        // check, applying a stale view would fork the *old* branch and
+        // silently overwrite `self.branch`, discarding intervening edits.
+        if !Arc::ptr_eq(&view.branch(), &self.branch) {
+            return Err(BufferError::StaleView);
+        }
         let new_branch = view
             .apply(normalised_range, replacement)
             .map_err(BufferError::Io)?;

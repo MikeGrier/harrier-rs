@@ -156,14 +156,45 @@ impl Source {
         validate_encoder(encoding)?;
 
         // ── Step 3: Line-ending detection ─────────────────────────────────
-        // Scan the probe bytes after the BOM.
+        // Scan the probe bytes after the BOM.  For multi-byte encodings
+        // (notably UTF-16LE/BE) a `\r\n` sequence is encoded as four bytes
+        // with interleaved zero bytes, so running the detector directly on
+        // the raw probe would see bare `\r` and `\n` bytes and never
+        // classify the source as `CrLf`.  To handle this correctly we
+        // decode the probe to UTF-8 first when the selected encoding is
+        // anything other than a single-byte / ASCII-superset encoding
+        // (i.e. when `is_ascii_compatible()` is false, which covers
+        // UTF-16LE, UTF-16BE, and the like), and then run the detector
+        // over the decoded UTF-8 bytes.  For ASCII-compatible encodings
+        // (UTF-8, windows-1252, the ISO-8859 family, EUC-*, Shift_JIS,
+        // GB18030, Big5, etc.) `\r` and `\n` retain their ASCII byte
+        // values and the raw-byte scan is correct and cheaper.
         let content_probe = if bom_len < probe.len() {
             &probe[bom_len..]
         } else {
             &[]
         };
 
-        let line_ending = detect_line_ending(content_probe, config.line_ending_default)
+        let decoded_storage: String;
+        let detect_bytes: &[u8] = if encoding.is_ascii_compatible() {
+            content_probe
+        } else {
+            // Decode without BOM handling (we've already stripped it) and
+            // with malformed sequences replaced; we only need accurate
+            // CR/LF positions, not a perfect round-trip.
+            let mut decoder = encoding.new_decoder_without_bom_handling();
+            let max_len = decoder
+                .max_utf8_buffer_length_without_replacement(content_probe.len())
+                .unwrap_or(content_probe.len() * 4);
+            decoded_storage = {
+                let mut s = String::with_capacity(max_len);
+                let _ = decoder.decode_to_string(content_probe, &mut s, true);
+                s
+            };
+            decoded_storage.as_bytes()
+        };
+
+        let line_ending = detect_line_ending(detect_bytes, config.line_ending_default)
             // If no terminators were found, fall back to the caller's default
             // or LF as the universal fallback.
             .or(config.line_ending_default)

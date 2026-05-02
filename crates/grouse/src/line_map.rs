@@ -97,19 +97,22 @@ impl LineMap {
 
     /// Scan the next unscanned segment.
     ///
-    /// Returns `true` if a segment was scanned, `false` if all segments are
-    /// already exact.  After scanning, fires [`LineMapEvent::LineCountChanged`]
-    /// and [`LineMapEvent::RegionExact`] as appropriate.
-    pub fn scan_next_segment(&mut self) -> bool {
+    /// Returns `Ok(true)` if a segment was scanned, `Ok(false)` if all
+    /// segments are already exact.  Returns `Err` if the underlying branch
+    /// read fails; in that case the segment is left unscanned so the caller
+    /// can retry.  After a successful scan, fires
+    /// [`LineMapEvent::LineCountChanged`] and [`LineMapEvent::RegionExact`]
+    /// as appropriate.
+    pub fn scan_next_segment(&mut self) -> Result<bool, std::io::Error> {
         let Some(idx) = self.next_unscanned() else {
-            return false;
+            return Ok(false);
         };
-        self.scan_segment(idx);
-        true
+        self.scan_segment(idx)?;
+        Ok(true)
     }
 
     /// Scan segment at `idx`.  Assumes `idx` is in bounds and not yet exact.
-    fn scan_segment(&mut self, idx: usize) {
+    fn scan_segment(&mut self, idx: usize) -> Result<(), std::io::Error> {
         let seg = &self.segments[idx];
         let byte_range = seg.byte_range.clone();
         let skip = seg.skip_first_byte;
@@ -131,7 +134,7 @@ impl LineMap {
 
         while pos < scan_end {
             let to_read = ((scan_end - pos) as usize).min(SCAN_BUF);
-            let n = self.branch.read_at(pos, &mut buf[..to_read]).unwrap_or(0);
+            let n = self.branch.read_at(pos, &mut buf[..to_read])?;
             if n == 0 {
                 break;
             }
@@ -173,7 +176,7 @@ impl LineMap {
             if byte_range.end < branch_len {
                 // Peek at the first byte of the next segment.
                 let mut peek = [0u8; 1];
-                if self.branch.read_at(byte_range.end, &mut peek).ok() == Some(1)
+                if self.branch.read_at(byte_range.end, &mut peek)? == 1
                     && peek[0] == b'\n'
                 {
                     // Cross-boundary CRLF: attribute to this segment.
@@ -213,6 +216,7 @@ impl LineMap {
                 end_line,
             });
         }
+        Ok(())
     }
 
     /// Compute the current best [`LineCount`] estimate.
@@ -304,7 +308,7 @@ impl LineMap {
             }
 
             // Scanned segments don't cover `line` yet.  Scan one more.
-            if !self.scan_next_segment() {
+            if !self.scan_next_segment()? {
                 // All segments are now scanned; `line` is past EOF.
                 return Ok(None);
             }
@@ -434,7 +438,7 @@ impl LineMap {
             }
 
             // Segment not yet exact; scan until it is.
-            if !self.scan_next_segment() {
+            if !self.scan_next_segment()? {
                 // All segments scanned but still not found (offset >= branch_len).
                 return Ok(None);
             }
@@ -451,6 +455,19 @@ impl LineMap {
         let seg = &self.segments[seg_idx];
 
         let scan_start = seg.byte_range.start + u64::from(seg.skip_first_byte);
+
+        if offset < scan_start {
+            // This can only happen when the segment begins with the skipped
+            // `\n` half of a cross-boundary CRLF.  That `\n` is the second
+            // byte of a CRLF terminator whose `\r` lives in the previous
+            // segment; in the normalised (LF-only) view both bytes collapse
+            // to the single terminator at the `\r`'s position.  Resolve the
+            // query against the previous segment using the `\r` offset so we
+            // report the correct `(line, col)` for the line being terminated
+            // instead of underflowing on `offset - line_start`.
+            debug_assert!(seg_idx > 0 && offset == seg.byte_range.start);
+            return self.line_col_in_segment(seg_idx - 1, offset - 1);
+        }
 
         let mut line = seg_first_line;
         let mut line_start = scan_start;

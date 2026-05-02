@@ -57,18 +57,27 @@ impl GrouseLineSource {
     /// still preserving as much content as possible.
     pub fn new(lines: Lines) -> Self {
         let encoding = lines.encoding();
+        // The `Lines` iterator appends a normalized '\n' terminator, encoded
+        // in the source encoding. For most encodings that is a single 0x0A
+        // byte, but UTF-16LE uses `0x0A 0x00` and UTF-16BE uses `0x00 0x0A`.
+        // Compute the exact terminator byte sequence once.
+        let terminator_bytes: &[u8] = if encoding == encoding_rs::UTF_16LE {
+            &[0x0A, 0x00]
+        } else if encoding == encoding_rs::UTF_16BE {
+            &[0x00, 0x0A]
+        } else {
+            &[0x0A]
+        };
         let collected: Vec<String> = lines
             .map(|(bytes, terminator)| {
-                // Strip the appended LF byte for all terminated lines.
+                // Strip the appended terminator for terminated lines.
                 // LineTerminator::End means there was no trailing newline,
                 // so the bytes contain no terminator to strip.
                 let content = match terminator {
                     LineTerminator::End => &bytes[..],
                     LineTerminator::Ending(_) => {
-                        // The iterator always appends a single '\n' byte.
-                        let len = bytes.len();
-                        if len > 0 && bytes[len - 1] == b'\n' {
-                            &bytes[..len - 1]
+                        if bytes.ends_with(terminator_bytes) {
+                            &bytes[..bytes.len() - terminator_bytes.len()]
                         } else {
                             &bytes[..]
                         }
