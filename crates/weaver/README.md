@@ -1,20 +1,20 @@
-# grouse
+# weaver
 
 A Rust crate providing a line-map and character-encoding–aware red-green tree for structured,
 lossless, incrementally-editable text, built on top of the [`redwing`](../redwing/README.md) crate.
 
 ## Overview
 
-`grouse` is the text layer that sits directly above `redwing`.  Where `redwing` operates purely at
+`weaver` is the text layer that sits directly above `redwing`.  Where `redwing` operates purely at
 the level of raw bytes — tracking deltas, managing piece tables, and providing non-destructive change
-management — `grouse` introduces the concepts that are meaningful for *text*:
+management — `weaver` introduces the concepts that are meaningful for *text*:
 
 - **Lines.** A structured line map over the byte buffer, allowing efficient translation between
   byte offsets and `(line, column)` coordinates regardless of the line-ending convention in use
   (`LF`, `CRLF`, or legacy `CR`).
 - **Character encoding.** Transparent decoding and re-encoding of byte regions using a declared
   source encoding (UTF-8, UTF-16LE, UTF-16BE, Latin-1, and others via `encoding_rs`).  Offset
-  arithmetic inside `grouse` is always performed in bytes; decoded character views are derived
+  arithmetic inside `weaver` is always performed in bytes; decoded character views are derived
   on demand and never alter the underlying byte representation.
 - **A red-green tree.** A two-level tree structure in the spirit of the
   [`rowan`](https://github.com/rust-analyzer/rowan) crate, adapted to be encoding-agnostic.  The
@@ -28,11 +28,11 @@ management — `grouse` introduces the concepts that are meaningful for *text*:
 more `DerivedBranch` objects that each carry an independent set of deltas against the base.  It has
 no knowledge of encoding, lines, or characters.
 
-`grouse` wraps a `redwing` branch and adds the text-specific layer on top:
+`weaver` wraps a `redwing` branch and adds the text-specific layer on top:
 
 ```
 ┌─────────────────────────────────────────────┐
-│                   grouse                    │  ← line map, encoding, red-green tree
+│                   weaver                    │  ← line map, encoding, red-green tree
 ├─────────────────────────────────────────────┤
 │                   redwing                   │  ← byte deltas, piece table, change management
 ├─────────────────────────────────────────────┤
@@ -41,7 +41,7 @@ no knowledge of encoding, lines, or characters.
 └─────────────────────────────────────────────┘
 ```
 
-When a text edit is made through `grouse`, it computes the affected byte range (accounting for the
+When a text edit is made through `weaver`, it computes the affected byte range (accounting for the
 source encoding and any multi-byte characters), constructs a replacement byte sequence in the same
 encoding, and hands that byte-level replacement to the underlying `redwing` branch as a delta.  The
 original bytes are never mutated.
@@ -55,9 +55,9 @@ unconditional assumption that the source is UTF-8.  Every token, every node, eve
 documents, or other encodings requires a lossy up-front transcode — which changes byte offsets and
 makes round-tripping back to the original encoding fragile.
 
-`grouse` takes a different approach:
+`weaver` takes a different approach:
 
-| Concept in `rowan`               | Concept in `grouse`                                      |
+| Concept in `rowan`               | Concept in `weaver`                                      |
 |----------------------------------|----------------------------------------------------------|
 | Source text (UTF-8 only)         | Byte buffer with declared encoding (any `encoding_rs` encoding) |
 | UTF-8 text offset                | Byte offset (primary); decoded char offset derived on demand |
@@ -67,31 +67,31 @@ makes round-tripping back to the original encoding fragile.
 | `SyntaxNode` / `SyntaxToken`     | `TextNode` / `TextToken` (encoding-aware)                |
 | Edit API (`SyntaxEditor`)        | Edit API over decoded text, emits byte deltas to `redwing` |
 
-`grouse` does not aim to be a drop-in replacement for `rowan`; the API will differ where necessary
+`weaver` does not aim to be a drop-in replacement for `rowan`; the API will differ where necessary
 to honour source encodings and to expose the richer change-management model that `redwing` provides.
 
 ## Input Model
 
-`grouse` takes its byte data from a `redwing` `Branch` — specifically an `Arc<dyn Branch>`.  The
+`weaver` takes its byte data from a `redwing` `Branch` — specifically an `Arc<dyn Branch>`.  The
 choice of `Branch` rather than `Thicket` is deliberate:
 
-- A `Thicket` is an **owner** of the first writable branch and the root of a fork tree.  `grouse`
+- A `Thicket` is an **owner** of the first writable branch and the root of a fork tree.  `weaver`
   does not need to own the thicket; it only needs read and (optionally) write access to one branch
   within it.
 - An `Arc<dyn Branch>` is the natural handle for that: it allows multiple consumers to share the
-  same branch, and the interior-mutability of `DerivedBranch` means writes from `grouse` are
-  recorded as deltas without requiring `grouse` to hold exclusive access.
+  same branch, and the interior-mutability of `DerivedBranch` means writes from `weaver` are
+  recorded as deltas without requiring `weaver` to hold exclusive access.
 
-In addition to the branch, `grouse` accepts an optional **byte range** `[start, end)` within the
-branch.  This allows `grouse` to treat an embedded text region inside a larger binary file as its
+In addition to the branch, `weaver` accepts an optional **byte range** `[start, end)` within the
+branch.  This allows `weaver` to treat an embedded text region inside a larger binary file as its
 working domain, without requiring the caller to slice or copy the data.  When no range is
 supplied, the entire branch is the working domain.
 
 ### No Materialisation
 
-`grouse` **must not require the full byte content to be resident in memory at once.**  The
+`weaver` **must not require the full byte content to be resident in memory at once.**  The
 `Branch` trait provides `read_at(offset, buf)` and `as_reader()` — both are lazy, demand-driven
-interfaces that read only as many bytes as the caller requests.  `grouse` uses these exclusively
+interfaces that read only as many bytes as the caller requests.  `weaver` uses these exclusively
 for scanning:
 
 - The **line map** is built lazily and incrementally, never requiring a full up-front scan.  It
@@ -111,7 +111,7 @@ while holding only a small, bounded amount of memory.
 
 ## Use Cases
 
-`grouse` is designed to serve two distinct but closely related consumers.  The two modes differ
+`weaver` is designed to serve two distinct but closely related consumers.  The two modes differ
 enough in their data-structure requirements that they are treated as separate operating modes
 rather than a single unified API:
 
@@ -160,7 +160,7 @@ binary-patch tool) can skip it.
 ### 3. Encoding-only mode — arbitrary-encoding parser substrate
 
 A rowan-compatible parser crate that wants to operate over source files in arbitrary encodings
-needs none of grouse's line abstraction — it manages its own tree structure — but it does need:
+needs none of weaver's line abstraction — it manages its own tree structure — but it does need:
 
 - **Encoding detection.** Determine the source encoding automatically from the probe buffer,
   with all the same BOM and chardetng machinery as the other modes.
@@ -171,7 +171,7 @@ needs none of grouse's line abstraction — it manages its own tree structure �
 - **Forward character iteration from a sync point.** Decode characters in sequence from a
   known-good offset, yielding `(start_offset, char, end_offset)` triples in branch coordinates.
 - **Re-encoding for insertion.** When the parser crate wants to insert or replace text, it
-  has Unicode strings; grouse must re-encode them to the source encoding's byte sequences.
+  has Unicode strings; weaver must re-encode them to the source encoding's byte sequences.
 
 Encoding-only mode provides exactly these four services and nothing else.  No line map is built,
 no line abstraction is presented, and the caller is responsible for all structural interpretation
@@ -220,7 +220,7 @@ errors wrap or re-export as variants.
 
 ### Line Ending Abstraction
 
-**Design intent.** `grouse`'s client-facing abstraction presents text as a sequence of *lines* —
+**Design intent.** `weaver`'s client-facing abstraction presents text as a sequence of *lines* —
 the line-ending bytes are not visible to clients.  A client iterates lines, reads line content,
 and writes line content without ever seeing or producing `\n`, `\r\n`, or `\r` bytes directly.
 The line endings live below the abstraction boundary in the `redwing` byte layer, where they are
@@ -255,7 +255,7 @@ the detailed design phase:
    | `CRLF` | `0x0D 0x0A` | Windows default |
    | `CR` | `0x0D` | Legacy Classic Mac OS; rare in new files |
 
-   **Detection — Resolved.** `grouse` scans the probe buffer (the same up-to-8 KiB block
+   **Detection — Resolved.** `weaver` scans the probe buffer (the same up-to-8 KiB block
    already read for encoding detection — no second probe) and counts the occurrences of each
    terminator kind.  The winner is selected by the following rule in order:
 
@@ -309,7 +309,7 @@ the detailed design phase:
 
 5. **Inserting line-break characters through the content API — Resolved.**  If a caller
    attempts to insert or replace text within a line using the line-content API, and the
-   replacement string contains any character or byte sequence that `grouse` would recognise as
+   replacement string contains any character or byte sequence that `weaver` would recognise as
    a line boundary during scanning, the operation returns `Err`.  It is not silently split into
    multiple lines.  Structural operations — splitting a line at a position, appending a new
    empty line, inserting a line after another — are distinct methods that go through the
@@ -318,21 +318,21 @@ the detailed design phase:
    without it being aware.
 
    **The prohibition is self-referential by design.**  The set of sequences that are illegal
-   to insert through the content API is exactly the set of sequences that `grouse` recognises
+   to insert through the content API is exactly the set of sequences that `weaver` recognises
    as line terminators.  There is no separate list to maintain; the two are defined together.
-   If `grouse`'s recognised line-ending set ever changes, the content-API prohibition changes
+   If `weaver`'s recognised line-ending set ever changes, the content-API prohibition changes
    with it automatically and consistently.
 
 ### Multi-Line Regex and the Normalised Logical View
 
-`grouse` supports multi-line regular expressions by providing a **normalised view** of the
-branch content.  Because `grouse` hides line terminators from clients (see *Line Ending
+`weaver` supports multi-line regular expressions by providing a **normalised view** of the
+branch content.  Because `weaver` hides line terminators from clients (see *Line Ending
 Abstraction* above), it must also hide them from the regex engine — a pattern author cannot
 write a portable multi-line pattern if the raw terminator bytes are visible, since `foo\nbar`
 would fail against a CRLF file and never match a CR-only file.
 
-**grouse is not a regex runner.** The caller owns the regex engine, constructs the pattern, and
-drives the match loop.  grouse's role is to provide the contiguous normalised buffer the regex
+**weaver is not a regex runner.** The caller owns the regex engine, constructs the pattern, and
+drives the match loop.  weaver's role is to provide the contiguous normalised buffer the regex
 engine requires and to translate match positions back to branch coordinates when the caller
 wants to apply a replacement.
 
@@ -383,7 +383,7 @@ remains valid for every `view.apply()` call in the loop — no recomputation bet
 **Memory implication.** The normalised buffer must be contiguous.  For multi-line regex over a
 range of the branch, that range (decoded and normalised) must fit in memory.  For ranges within
 the 256 MiB ceiling this is supported.  For larger ranges, `normalised_view` returns an error
-at materialisation time.  Single-line patterns do not require a full materialisation; grouse can
+at materialisation time.  Single-line patterns do not require a full materialisation; weaver can
 provide single-line content line by line without buffering the whole file (see the line iterator
 API).
 
@@ -438,7 +438,7 @@ recomputed; all other segments remain valid.  This means:
 - The overall memory cost is O(lines actually visited), not O(total lines in the file).
 
 **Line count — progressive accuracy.** Because the map is built lazily, the total line count is
-not known until the entire file has been scanned.  grouse exposes line count as a value paired
+not known until the entire file has been scanned.  weaver exposes line count as a value paired
 with an exactness flag:
 
 ```rust
@@ -455,14 +455,14 @@ segments are populated the estimate converges; once every segment is populated, 
 `true` and `value` is authoritative.  Callers such as scroll bars or "go to line" dialogs that
 need *some* number immediately — and can tolerate a refinement later — use this API naturally.
 
-**Background scan and eventing.** grouse does not own threads.  To improve the estimate
+**Background scan and eventing.** weaver does not own threads.  To improve the estimate
 proactively (e.g. for a scroll bar that wants a reasonable total line count before the user
 has navigated the whole file), the caller calls a method such as `scan_next_segment()` from a
 background thread.  Each call populates one segment and, if the line count estimate changed, fires
 a change notification.
 
 Notifications are delivered via a caller-supplied channel (`mpsc::Sender` or equivalent) rather
-than a registered callback, so grouse is decoupled from any particular threading or async model.
+than a registered callback, so weaver is decoupled from any particular threading or async model.
 The caller drains the channel on the UI thread and responds to each notification.
 
 The notification surface covers at minimum:
@@ -519,7 +519,7 @@ fn encode(text: &str) -> Result<Vec<u8>>;
 the decoded text of a node it calls `chars_from(nearest_sync_point(node.start))` and consumes
 up to `node.end`.  When it inserts or replaces text it calls `encode()` to obtain the branch
 bytes to splice.  The rowan-like crate never sees raw encoding bytes and never needs to know
-which encoding is in use; grouse is the complete encoding boundary.
+which encoding is in use; weaver is the complete encoding boundary.
 
 **Sync-point population follows the same lazy pattern as the line map.** The index is built
 on demand as offsets are queried, with `scan_next_segment()` available for background
@@ -528,10 +528,10 @@ population events in encoding-only mode.
 
 ### Character Encoding
 
-`grouse` uses [`encoding_rs`](https://crates.io/crates/encoding_rs) for decoding and re-encoding.
-Decoded `String` values produced by `grouse` are always Rust-native UTF-8; the encoding is an
+`weaver` uses [`encoding_rs`](https://crates.io/crates/encoding_rs) for decoding and re-encoding.
+Decoded `String` values produced by `weaver` are always Rust-native UTF-8; the encoding is an
 attribute of the *storage representation*, not of the in-memory API.  Re-encoding uses the same
-declared encoding: when a caller writes new text into a node, `grouse` re-encodes it in the source
+declared encoding: when a caller writes new text into a node, `weaver` re-encodes it in the source
 encoding before producing the byte splice handed to `redwing`.
 
 **Encode/decode symmetry.** `encoding_rs` implements the WHATWG Encoding Standard, which defines
@@ -542,23 +542,23 @@ encodings include ISO-2022-CN, HZ-GB-2312, ISO-2022-KR, BOCU-1, SCSU, and UTF-7 
 which is not in the spec at all).  For practical purposes this is rarely a problem — every
 encoding that `chardetng` could plausibly return for real-world files (UTF-8, UTF-16LE/BE,
 windows-125x, ISO-8859-x, Shift_JIS, EUC-JP, GBK, EUC-KR, Big5, GB18030) has both a working
-decoder and encoder in `encoding_rs`.  However, `grouse` must validate at open time that the
+decoder and encoder in `encoding_rs`.  However, `weaver` must validate at open time that the
 detected encoding has an encoder available before entering a mode that will produce write-back
 output; if it does not, read-only / sed-scan mode (which never re-encodes) remains valid.
 
 #### Encoding Detection
 
-Rather than requiring the caller to know the source encoding in advance, `grouse` detects it
+Rather than requiring the caller to know the source encoding in advance, `weaver` detects it
 automatically at open time.  The detection pipeline is:
 
-1. **Probe read.** `grouse` reads up to a configurable number of bytes from the start of the
+1. **Probe read.** `weaver` reads up to a configurable number of bytes from the start of the
    source (default: 8 192 bytes) into a small local buffer.  This is the *only* speculative
-   buffering `grouse` ever does; the probe buffer is discarded once the encoding is chosen.
+   buffering `weaver` ever does; the probe buffer is discarded once the encoding is chosen.
 
 2. **BOM check.** If BOM detection is enabled (default: on), the probe buffer is passed to
    `encoding_rs::Encoding::for_bom()`.  `encoding_rs` recognises the UTF-8 BOM (`EF BB BF`),
    the UTF-16LE BOM (`FF FE`), and the UTF-16BE BOM (`FE FF`).  A detected BOM takes priority
-   over all other detection heuristics.  `grouse` records the BOM's byte length so it can be
+   over all other detection heuristics.  `weaver` records the BOM's byte length so it can be
    skipped or forwarded as the caller requests (see *BOM pass-through* below).
 
 3. **Heuristic detection.** If no BOM is found (or BOM detection is disabled), the probe buffer
@@ -573,7 +573,7 @@ automatically at open time.  The detection pipeline is:
 
 #### The `EncodingDetector` Trait
 
-`chardetng` is the default but is not mandatory.  `grouse` defines an `EncodingDetector` trait
+`chardetng` is the default but is not mandatory.  `weaver` defines an `EncodingDetector` trait
 so that callers can supply their own detector:
 
 ```rust
@@ -614,7 +614,7 @@ all skipped.
 
 #### BOM Pass-Through
 
-When a BOM is detected, `grouse` records its byte span.  Two behaviours are then possible:
+When a BOM is detected, `weaver` records its byte span.  Two behaviours are then possible:
 
 - **Strip (default, `bom_pass_through: false`).** The BOM bytes are excluded from the logical
   text view.  In sed mode they are not forwarded to the output sink.  In editor mode the line
@@ -647,7 +647,7 @@ the `EncodingDetector` trait and the initialisation options are the intended ext
 #### Decode Error Policy and Misdetection Recovery
 
 `chardetng` does not expose a confidence score.  On ambiguous input it makes a best guess and
-commits to it; there is no "low confidence" signal that `grouse` can act on.  If that guess is
+commits to it; there is no "low confidence" signal that `weaver` can act on.  If that guess is
 wrong, the error will manifest as invalid byte sequences during decoding, potentially far into the
 file.  The appropriate response depends on the operating mode and is controlled by a
 `DecodeErrorPolicy` value in the initialisation options:
@@ -678,7 +678,7 @@ driven by whether replacement byte sequences are larger than the regions they re
   partial in-place write, the source file is left in an irrecoverably garbled state with no
   way to reconstruct the original.  This is the same class of failure that drove "binary
   document" formats like the original `.doc` format to implement full transactional
-  database-within-a-file storage — the problem is not esoteric, it is fundamental.  `grouse`
+  database-within-a-file storage — the problem is not esoteric, it is fundamental.  `weaver`
   does not expose an in-place write mode.  The correct pattern is always: write to a temporary
   file, then rename atomically over the original.
 - **Larger replacements.** As soon as any replacement grows the byte sequence, a temporary
@@ -758,7 +758,7 @@ Nodes are internal and own a list of children; tokens are leaves that directly c
 byte span in the source.  The green tree is immutable and reference-counted so that multiple red
 trees can share the same structural description.
 
-The granularity of the green tree is left to the consumer: `grouse` defines the mechanism but not
+The granularity of the green tree is left to the consumer: `weaver` defines the mechanism but not
 any particular grammar.  A consumer might choose a tree as coarse as `[BOM] [line]* [EOF]` or as
 fine-grained as a full language grammar.
 
@@ -775,11 +775,11 @@ the branch to storage is an explicit, final step owned by the caller.
 
 ## Memory Model
 
-`grouse` operates under an explicit memory discipline:
+`weaver` operates under an explicit memory discipline:
 
 - **No single internal allocation may exceed a compile-time constant.**  The target ceiling is
   256 MiB.  This is not a hard limit enforced at runtime (Rust does not provide that guarantee)
-  but a design constraint: no data structure or algorithm inside `grouse` is permitted to
+  but a design constraint: no data structure or algorithm inside `weaver` is permitted to
   *require* an allocation larger than this in its normal operating path.  Structures that would
   need to grow beyond the ceiling must be segmented.
 - **Sed-mode pipeline depth is bounded.**  The internal buffer between the source scanner and the
@@ -790,13 +790,13 @@ the branch to storage is an explicit, final step owned by the caller.
   bounded number of lines and a bounded number of bytes, so individual segment allocations are
   predictably small regardless of file size.
 - **Caller-requested materialisation is the caller's responsibility.**  If a caller asks
-  `grouse` for a `Vec<u8>` of the full processed output, `grouse` will attempt to produce it.
+  `weaver` for a `Vec<u8>` of the full processed output, `weaver` will attempt to produce it.
   The decision to materialise an arbitrarily large buffer belongs to the caller, not to
-  `grouse`; `grouse` will not refuse the request on memory grounds, but it will not buffer
+  `weaver`; `weaver` will not refuse the request on memory grounds, but it will not buffer
   speculatively on the caller's behalf either.
 - **Storage offloading for large modified content is an open question.**  For very large files
   with many accumulated deltas, it may eventually be necessary to spill the `redwing` delta log
-  (or the materialised output) to temporary storage.  Whether that mechanism lives in `grouse`,
+  (or the materialised output) to temporary storage.  Whether that mechanism lives in `weaver`,
   in `redwing`, or as an optional coordination layer between the two is left open for the
   detailed design phase.
 

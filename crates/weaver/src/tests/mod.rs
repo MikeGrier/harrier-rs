@@ -1,9 +1,9 @@
 // Copyright (c) 2026, Michael Grier
 
-//! Unit tests for the `grouse` crate.
+//! Unit tests for the `weaver` crate.
 //!
 //! Each submodule mirrors the source module it tests.  Integration tests
-//! (MA-IT-*) live in `crates/grouse/tests/` per Cargo conventions.
+//! (MA-IT-*) live in `crates/weaver/tests/` per Cargo conventions.
 
 mod buffer_tests;
 mod chars_tests;

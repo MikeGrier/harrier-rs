@@ -1,7 +1,7 @@
 // Copyright (c) 2026, Michael Grier
 
 //! `Source` builder and `SourceError` — the entry point for opening a
-//! byte stream for processing by grouse.
+//! byte stream for processing by weaver.
 
 use std::sync::Arc;
 
