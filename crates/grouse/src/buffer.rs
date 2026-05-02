@@ -334,7 +334,7 @@ impl Buffer {
         // UTF-16LE/BE sources are rejected at Buffer construction, so any
         // encoding that reaches here and is not ASCII-compatible is treated
         // as opaque (leave bytes as-is) for safety.
-        let ascii_compatible = self.encoding == encoding_rs::UTF_8 || self.encoding.is_single_byte();
+        let ascii_compatible = std::ptr::eq(self.encoding, encoding_rs::UTF_8) || self.encoding.is_single_byte();
         let normalised = if ascii_compatible {
             let mut out = Vec::with_capacity(raw.len());
             let mut i = 0;
