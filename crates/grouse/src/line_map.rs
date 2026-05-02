@@ -240,10 +240,12 @@ impl LineMap {
 
         let from_line = self.line_start_of_segment(first_seg);
 
-        for seg in &mut self.segments[first_seg..] {
+        for (i, seg) in self.segments[first_seg..].iter_mut().enumerate() {
             seg.terminators.clear();
             seg.trailing_partial = false;
-            seg.skip_first_byte = false;
+            if i != 0 {
+                seg.skip_first_byte = false;
+            }
             seg.exact = false;
         }
 
