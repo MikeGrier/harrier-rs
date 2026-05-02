@@ -32,7 +32,7 @@
 use std::{io::Write as _, sync::Arc};
 
 use encoding_rs::UTF_8;
-use grouse::{
+use weaver::{
     denormalise::DenormaliseWriter,
     encoding::{BomPolicy, LineEnding, SourceConfig},
     source::Source,

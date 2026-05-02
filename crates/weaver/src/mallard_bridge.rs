@@ -1,10 +1,10 @@
 // Copyright (c) 2026, Michael Grier
 
-//! Bridge between grouse and mallard.
+//! Bridge between weaver and mallard.
 //!
-//! [`GrouseLineSource`] implements [`mallard::LineSource`] for a grouse
+//! [`GrouseLineSource`] implements [`mallard::LineSource`] for a weaver
 //! [`Lines`] iterator, making it possible to populate a mallard
-//! [`LineBuffer`](mallard::LineBuffer) directly from any grouse-opened
+//! [`LineBuffer`](mallard::LineBuffer) directly from any weaver-opened
 //! source without going through an intermediate file.
 //!
 //! All lines are collected eagerly during construction: each raw byte slice
@@ -14,12 +14,12 @@
 //! reference.
 //!
 //! [`GrouseEncodingValidator`] implements [`mallard::EncodingValidator`] for
-//! any `&'static Encoding` from `encoding_rs`.  It uses grouse's
+//! any `&'static Encoding` from `encoding_rs`.  It uses weaver's
 //! `can_encode_with` to test whether a given line can round-trip through the
 //! target encoding, with an ASCII fast-path that avoids any allocation.
 //!
 //! [`from_grouse`] is a convenience constructor that combines both: it accepts
-//! a grouse [`Source`](crate::source::Source), converts it to a
+//! a weaver [`Source`](crate::source::Source), converts it to a
 //! [`GrouseLineSource`], installs a [`GrouseEncodingValidator`] as the primary
 //! validator, and returns a fully-populated [`mallard::LineBuffer`].
 
@@ -36,7 +36,7 @@ use crate::{
 
 // ── GrouseLineSource ──────────────────────────────────────────────────────────
 
-/// A [`LineSource`] backed by a grouse [`Lines`] iterator.
+/// A [`LineSource`] backed by a weaver [`Lines`] iterator.
 ///
 /// Eagerly consumes the iterator during construction, decoding each line from
 /// the source encoding to UTF-8 and stripping its line terminator.  The
@@ -174,13 +174,13 @@ impl EncodingValidator for ChainedValidator {
 
 // ── from_grouse ───────────────────────────────────────────────────────────────
 
-/// Convenience constructor: open a grouse [`Source`], decode all lines into a
+/// Convenience constructor: open a weaver [`Source`], decode all lines into a
 /// mallard [`LineBuffer`], and install a [`GrouseEncodingValidator`] so that
 /// future edits are constrained to the source encoding.
 ///
 /// # Parameters
 ///
-/// - `source` — a fully-probed grouse `Source` (encoding and line-ending
+/// - `source` — a fully-probed weaver `Source` (encoding and line-ending
 ///   already resolved).
 /// - `extra` — an optional *additional* validator that is run after the
 ///   `GrouseEncodingValidator`.  Pass `None` when only encoding enforcement

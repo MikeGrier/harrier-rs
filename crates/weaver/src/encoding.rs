@@ -25,7 +25,7 @@ pub enum LineEnding {
 
 // ── MA-2: DecodeErrorPolicy ───────────────────────────────────────────────────
 
-/// How grouse handles bytes that cannot be decoded in the detected encoding.
+/// How weaver handles bytes that cannot be decoded in the detected encoding.
 ///
 /// The variants are listed from strictest to most permissive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
