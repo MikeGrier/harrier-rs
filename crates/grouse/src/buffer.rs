@@ -60,6 +60,21 @@ pub enum BufferError {
     /// Re-create the view (e.g. via [`Buffer::view_range`] or
     /// [`Buffer::line_content`]) after any structural edit and retry.
     StaleView,
+
+    /// The encoding of the source does not have a usable encoder in
+    /// `encoding_rs`, so `Buffer` cannot write bytes back without corrupting
+    /// the file.
+    ///
+    /// This covers UTF-16LE and UTF-16BE: `encoding_rs` delegates their
+    /// `new_encoder()` to the UTF-8 encoder, so any bytes produced by
+    /// [`Encoded::encode`](crate::encoded::Encoded::encode) or the edit helpers
+    /// would be UTF-8 rather than UTF-16, silently corrupting the source.
+    ///
+    /// For read-only access to UTF-16 files use [`Source::as_chars`] or
+    /// [`Source::as_lines`] instead.
+    ///
+    /// `encoding_name` is the WHATWG name of the offending encoding.
+    EncodeUnsupported { encoding_name: &'static str },
 }
 
 impl std::fmt::Display for BufferError {
@@ -76,6 +91,11 @@ impl std::fmt::Display for BufferError {
             BufferError::StaleView => write!(
                 f,
                 "View was created from a stale branch state; re-create it after the previous edit"
+            ),
+            BufferError::EncodeUnsupported { encoding_name } => write!(
+                f,
+                "encoding '{encoding_name}' has no usable encoder in encoding_rs; \
+                 use Source::as_chars or Source::as_lines for read-only access"
             ),
         }
     }
@@ -134,13 +154,27 @@ impl Buffer {
     ///
     /// This is the internal constructor called by [`Source::as_buffer`].
     /// Use [`Buffer::with_sender`] to attach an event channel afterwards.
-    pub(crate) fn from_source(source: Source) -> Self {
-        let branch = source.branch();
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BufferError::EncodeUnsupported`] when the source encoding
+    /// lacks a usable encoder in `encoding_rs` (UTF-16LE and UTF-16BE).
+    /// For read-only access to those sources use [`Source::as_chars`] or
+    /// [`Source::as_lines`] instead.
+    pub(crate) fn from_source(source: Source) -> Result<Self, BufferError> {
         let encoding = source.encoding();
+        if std::ptr::eq(encoding, encoding_rs::UTF_16LE)
+            || std::ptr::eq(encoding, encoding_rs::UTF_16BE)
+        {
+            return Err(BufferError::EncodeUnsupported {
+                encoding_name: encoding.name(),
+            });
+        }
+        let branch = source.branch();
         let bom_len = source.bom_len();
         let line_ending = source.line_ending();
         let line_map = LineMap::new(Arc::clone(&branch), None, None);
-        Buffer {
+        Ok(Buffer {
             branch,
             encoding,
             bom_len,
@@ -148,7 +182,7 @@ impl Buffer {
             line_map,
             view_ceiling: DEFAULT_VIEW_CEILING,
             sender: None,
-        }
+        })
     }
 
     /// Attach an event sender and return `self`.
@@ -296,8 +330,37 @@ impl Buffer {
         let map =
             build_offset_map(self.branch.as_ref(), byte_range.clone()).map_err(BufferError::Io)?;
 
+        // Normalise CR/CRLF → LF, same as view_range.
+        // UTF-16LE/BE sources are rejected at Buffer construction, so any
+        // encoding that reaches here and is not ASCII-compatible is treated
+        // as opaque (leave bytes as-is) for safety.
+        let ascii_compatible = self.encoding == encoding_rs::UTF_8 || self.encoding.is_single_byte();
+        let normalised = if ascii_compatible {
+            let mut out = Vec::with_capacity(raw.len());
+            let mut i = 0;
+            while i < raw.len() {
+                match raw[i] {
+                    b'\r' => {
+                        out.push(b'\n');
+                        if i + 1 < raw.len() && raw[i + 1] == b'\n' {
+                            i += 2;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    b => {
+                        out.push(b);
+                        i += 1;
+                    }
+                }
+            }
+            out
+        } else {
+            raw
+        };
+
         Ok(View::new(
-            raw,
+            normalised,
             map,
             Arc::clone(&self.branch),
             byte_range.start,
@@ -445,7 +508,7 @@ impl Buffer {
         let insert_at = line_start + byte_col as u64;
         let term = self.terminator_bytes();
         let fork = self.branch.fork();
-        fork.insert_before(insert_at, term)
+        fork.insert_before(insert_at, &term)
             .map_err(BufferError::Io)?;
         self.replace_branch(fork);
         Ok(())
@@ -465,7 +528,7 @@ impl Buffer {
         let at_byte = self.line_offset(at)?;
         let term = self.terminator_bytes();
         let fork = self.branch.fork();
-        fork.insert_before(at_byte, term).map_err(BufferError::Io)?;
+        fork.insert_before(at_byte, &term).map_err(BufferError::Io)?;
         self.replace_branch(fork);
         Ok(())
     }
@@ -480,7 +543,7 @@ impl Buffer {
         let eof = self.branch.byte_len();
         let term = self.terminator_bytes();
         let fork = self.branch.fork();
-        fork.insert_before(eof, term).map_err(BufferError::Io)?;
+        fork.insert_before(eof, &term).map_err(BufferError::Io)?;
         self.replace_branch(fork);
         Ok(())
     }

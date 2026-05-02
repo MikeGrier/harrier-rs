@@ -410,3 +410,50 @@ fn offset_to_line_col_consistent_with_line_offset() {
         }
     }
 }
+
+// ── UTF-16 encoding rejection ─────────────────────────────────────────────────
+
+// 34. Buffer rejects UTF-16LE sources because encoding_rs has no real UTF-16LE
+//     encoder: edits would emit UTF-8 bytes and silently corrupt the file.
+#[test]
+fn utf16le_source_rejected_at_buffer_construction() {
+    use crate::encoding::BomPolicy;
+    use encoding_rs::UTF_16LE;
+
+    // UTF-16LE BOM + "hi" in UTF-16LE
+    let content: Vec<u8> = vec![0xFF, 0xFE, 0x68, 0x00, 0x69, 0x00];
+    let config = crate::encoding::SourceConfig {
+        encoding_hint: Some(UTF_16LE),
+        bom_policy: BomPolicy::Honour,
+        ..crate::encoding::SourceConfig::default()
+    };
+    let src = Source::new(branch(content), config).expect("Source::new");
+    let result = src.as_buffer();
+    assert!(
+        matches!(result, Err(BufferError::EncodeUnsupported { encoding_name: "UTF-16LE" })),
+        "expected EncodeUnsupported for UTF-16LE, got: {:?}",
+        result.err()
+    );
+}
+
+// 35. Buffer rejects UTF-16BE sources for the same reason as UTF-16LE.
+#[test]
+fn utf16be_source_rejected_at_buffer_construction() {
+    use crate::encoding::BomPolicy;
+    use encoding_rs::UTF_16BE;
+
+    // UTF-16BE BOM + "hi" in UTF-16BE
+    let content: Vec<u8> = vec![0xFE, 0xFF, 0x00, 0x68, 0x00, 0x69];
+    let config = crate::encoding::SourceConfig {
+        encoding_hint: Some(UTF_16BE),
+        bom_policy: BomPolicy::Honour,
+        ..crate::encoding::SourceConfig::default()
+    };
+    let src = Source::new(branch(content), config).expect("Source::new");
+    let result = src.as_buffer();
+    assert!(
+        matches!(result, Err(BufferError::EncodeUnsupported { encoding_name: "UTF-16BE" })),
+        "expected EncodeUnsupported for UTF-16BE, got: {:?}",
+        result.err()
+    );
+}

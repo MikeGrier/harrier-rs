@@ -24,7 +24,7 @@ fn map_no_sender(bytes: impl Into<Vec<u8>>, seg: u64) -> LineMap {
 
 /// Scan all segments of a map, returning the final exact line count.
 fn scan_all(map: &mut LineMap) -> LineCount {
-    while map.scan_next_segment() {}
+    while map.scan_next_segment().expect("scan_next_segment failed") {}
     map.current_line_count()
 }
 
@@ -105,7 +105,7 @@ fn empty_file_zero_segments() {
 #[test]
 fn empty_file_scan_returns_false() {
     let mut map = map_no_sender(b"".to_vec(), 64);
-    assert!(!map.scan_next_segment());
+    assert!(!map.scan_next_segment().expect("scan failed"));
 }
 
 // 11. Empty file has exact line count 0.
@@ -256,11 +256,11 @@ fn scan_next_segment_advances_in_order() {
     let mut map = map_no_sender(data.to_vec(), 3); // 3 segments of 3 bytes each
     assert_eq!(map.segment_count(), 3);
     assert_eq!(map.next_unscanned(), Some(0));
-    map.scan_next_segment();
+    map.scan_next_segment().expect("scan failed");
     assert_eq!(map.next_unscanned(), Some(1));
-    map.scan_next_segment();
+    map.scan_next_segment().expect("scan failed");
     assert_eq!(map.next_unscanned(), Some(2));
-    map.scan_next_segment();
+    map.scan_next_segment().expect("scan failed");
     assert_eq!(map.next_unscanned(), None);
 }
 
@@ -269,8 +269,8 @@ fn scan_next_segment_advances_in_order() {
 fn scan_next_segment_false_when_all_exact() {
     let data = b"line\n";
     let mut map = map_no_sender(data.to_vec(), 64);
-    assert!(map.scan_next_segment());
-    assert!(!map.scan_next_segment());
+    assert!(map.scan_next_segment().expect("scan failed"));
+    assert!(!map.scan_next_segment().expect("scan failed"));
 }
 
 // ── Estimate before any segment scanned ──────────────────────────────────────
@@ -320,7 +320,7 @@ fn estimate_mid_scan() {
 
     let mut map = map_no_sender(data, 256);
     // Scan only the first segment.
-    map.scan_next_segment();
+    map.scan_next_segment().expect("scan failed");
     let count = map.current_line_count();
     // First 256 bytes have 26 lines → density = 26/256 → estimate for 512 bytes = 52.
     assert!(!count.exact);
@@ -427,7 +427,7 @@ fn scan_events_order() {
     let (tx, rx) = mpsc::channel::<LineMapEvent>();
     let data = b"foo\nbar\n"; // 8 bytes, 1 segment with seg_size=64
     let mut map = LineMap::new(branch(data.to_vec()), Some(64), Some(tx));
-    map.scan_next_segment();
+    map.scan_next_segment().expect("scan failed");
     let ev1 = rx.recv().unwrap();
     let ev2 = rx.recv().unwrap();
     assert!(matches!(ev1, LineMapEvent::LineCountChanged { .. }));
@@ -457,7 +457,7 @@ fn scan_region_exact_lines() {
     let mut map = LineMap::new(branch(data.to_vec()), Some(2), Some(tx));
 
     // Scan segment 0 and collect events.
-    map.scan_next_segment();
+    map.scan_next_segment().expect("scan failed");
     let _cnt0 = rx.recv().unwrap(); // LineCountChanged
     let reg0 = rx.recv().unwrap(); // RegionExact
     assert!(
@@ -472,7 +472,7 @@ fn scan_region_exact_lines() {
     );
 
     // Scan segment 1.
-    map.scan_next_segment();
+    map.scan_next_segment().expect("scan failed");
     let _cnt1 = rx.recv().unwrap();
     let reg1 = rx.recv().unwrap();
     assert!(
@@ -487,7 +487,7 @@ fn scan_region_exact_lines() {
     );
 
     // Scan segment 2.
-    map.scan_next_segment();
+    map.scan_next_segment().expect("scan failed");
     let _cnt2 = rx.recv().unwrap();
     let reg2 = rx.recv().unwrap();
     assert!(

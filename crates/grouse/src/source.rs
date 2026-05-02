@@ -277,7 +277,7 @@ impl Source {
     /// Currently infallible; the `Result` return type is present to allow
     /// future error conditions without a breaking API change.
     pub fn as_buffer(self) -> Result<crate::buffer::Buffer, crate::buffer::BufferError> {
-        Ok(crate::buffer::Buffer::from_source(self))
+        crate::buffer::Buffer::from_source(self)
     }
 }
 
@@ -314,6 +314,13 @@ fn resolve_encoding_no_bom(
 /// misleading `Ok` result.  We therefore check by pointer identity against
 /// `encoding_rs::REPLACEMENT`, which is the canonical `&'static Encoding`
 /// value for that encoding.
+///
+/// Note: `encoding_rs` also lacks real encoders for UTF-16LE and UTF-16BE
+/// (those are decode-only in WHATWG output-encoding terms).  Those encodings
+/// are valid for read-only access via [`Lines`](crate::lines::Lines) and
+/// [`Chars`](crate::chars::Chars), but are rejected by
+/// [`Buffer::from_source`](crate::buffer::Buffer) because edits would
+/// silently emit UTF-8 bytes instead of preserving the UTF-16 encoding.
 ///
 /// Changing this check is a breaking change because callers rely on
 /// `Source::new` rejecting decode-only encodings at open time.
