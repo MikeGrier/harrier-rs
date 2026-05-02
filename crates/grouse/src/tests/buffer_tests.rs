@@ -457,3 +457,57 @@ fn utf16be_source_rejected_at_buffer_construction() {
         result.err()
     );
 }
+
+// ── Shift_JIS CRLF normalisation ─────────────────────────────────────────────
+
+/// Helper: build a Buffer backed by a Shift_JIS-encoded branch.
+/// Shift_JIS is ASCII-compatible (0x0D/0x0A appear only as standalone bytes),
+/// so view_range and line_content must still normalise CR/CRLF to LF.
+fn make_shift_jis_buffer(bytes: impl Into<Vec<u8>>) -> Buffer {
+    let br = branch(bytes);
+    let config = crate::encoding::SourceConfig {
+        encoding_hint: Some(encoding_rs::SHIFT_JIS),
+        ..crate::encoding::SourceConfig::default()
+    };
+    Source::new(br, config)
+        .expect("Source::new")
+        .as_buffer()
+        .expect("as_buffer")
+}
+
+// 36. view_range on a Shift_JIS CRLF source normalises CR+LF → LF.
+//     0x82 0xA0 is Shift_JIS 'あ'; 0x0D 0x0A is CRLF.
+#[test]
+fn view_range_shift_jis_crlf_normalised() {
+    // "あ\r\nB\r\n" in Shift_JIS bytes
+    let content: Vec<u8> = vec![0x82, 0xA0, 0x0D, 0x0A, 0x42, 0x0D, 0x0A];
+    let buf = make_shift_jis_buffer(content);
+    let view = buf.view_range(0..7).unwrap();
+    // Normalised: 0x82 0xA0 → 'あ' (unchanged), \r\n → \n, 0x42 → 'B', \r\n → \n
+    assert_eq!(view.bytes, &[0x82, 0xA0, 0x0A, 0x42, 0x0A]);
+}
+
+// 37. line_content on a Shift_JIS CRLF source normalises CR+LF → LF.
+#[test]
+fn line_content_shift_jis_crlf_normalised() {
+    // "あ\r\n" in Shift_JIS (3 source bytes + CRLF = 4 bytes)
+    // followed by "B\r\n" (1 + 2 = 3 bytes)
+    let content: Vec<u8> = vec![0x82, 0xA0, 0x0D, 0x0A, 0x42, 0x0D, 0x0A];
+    let mut buf = make_shift_jis_buffer(content);
+    let view0 = buf.line_content(0).unwrap();
+    // Normalised line 0: 0x82 0xA0 \n
+    assert_eq!(view0.bytes, &[0x82, 0xA0, 0x0A]);
+    let view1 = buf.line_content(1).unwrap();
+    // Normalised line 1: 0x42 \n
+    assert_eq!(view1.bytes, &[0x42, 0x0A]);
+}
+
+// 38. view_range on a Shift_JIS lone-CR source normalises bare CR → LF.
+#[test]
+fn view_range_shift_jis_bare_cr_normalised() {
+    // "X\rY" in Shift_JIS (ASCII bytes, lone CR)
+    let content: Vec<u8> = b"X\rY".to_vec();
+    let buf = make_shift_jis_buffer(content);
+    let view = buf.view_range(0..3).unwrap();
+    assert_eq!(view.bytes, b"X\nY");
+}

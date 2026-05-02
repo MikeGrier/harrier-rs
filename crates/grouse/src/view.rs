@@ -114,13 +114,41 @@ impl View {
     ///
     /// ## Errors
     ///
-    /// Propagates any [`std::io::Error`] from the underlying redwing branch
-    /// operations (`fork`, `delete`, `insert_before`).
+    /// - [`std::io::ErrorKind::InvalidInput`] when `normalised_range` is
+    ///   inverted (`start > end`) or when `normalised_range.end` exceeds the
+    ///   number of bytes in [`View::bytes`].
+    /// - Any [`std::io::Error`] from the underlying redwing branch operations
+    ///   (`fork`, `splice`).
     pub fn apply(
         &self,
         normalised_range: Range<u64>,
         replacement: &[u8],
     ) -> Result<Arc<dyn Branch>, std::io::Error> {
+        let view_len = self.bytes.len() as u64;
+
+        // Reject inverted or out-of-bounds ranges before touching the branch.
+        // An inverted range would cause unsigned subtraction to underflow when
+        // computing `source_len`; an out-of-bounds end would translate beyond
+        // the scanned source span and corrupt the splice position.
+        if normalised_range.start > normalised_range.end {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "normalised_range is inverted: start ({}) > end ({})",
+                    normalised_range.start, normalised_range.end
+                ),
+            ));
+        }
+        if normalised_range.end > view_len {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "normalised_range.end ({}) exceeds view length ({})",
+                    normalised_range.end, view_len
+                ),
+            ));
+        }
+
         let source_start =
             self.byte_range_start + self.offset_map.to_source(normalised_range.start);
         let source_end = self.byte_range_start + self.offset_map.to_source(normalised_range.end);

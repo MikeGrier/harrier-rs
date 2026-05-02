@@ -314,3 +314,45 @@ fn apply_replacement_containing_crlf_stored_verbatim() {
     let fork = view.apply(0..5, b"LINE1\r").unwrap();
     assert_eq!(mat(&fork), b"LINE1\r\nline2\n");
 }
+
+// ── View::apply bounds validation ────────────────────────────────────────────
+
+/// Inverted range (end < start) must return InvalidInput, not panic.
+#[test]
+fn apply_inverted_range_returns_error() {
+    let view = view_of(b"hello\n");
+    // start (4) > end (2)
+    let result = view.apply(4..2, b"x");
+    assert!(result.is_err());
+    let err = result.err().expect("expected Err");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "expected InvalidInput, got {err}");
+}
+
+/// End offset past the view length must return InvalidInput.
+#[test]
+fn apply_end_past_view_length_returns_error() {
+    let view = view_of(b"hello\n");
+    // normalised length is 6; 7 is past the end
+    let result = view.apply(0..7, b"x");
+    assert!(result.is_err());
+    let err = result.err().expect("expected Err");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "expected InvalidInput, got {err}");
+}
+
+/// Start offset equal to end offset (empty range) with end == view length is valid.
+#[test]
+fn apply_empty_range_at_eof_is_valid() {
+    let view = view_of(b"hello\n");
+    // normalised length is 6; inserting at position 6 (after last byte) is valid
+    let fork = view.apply(6..6, b" world").unwrap();
+    assert_eq!(mat(&fork), b"hello\n world");
+}
+
+/// Start offset equal to end offset (empty range) at view boundary is valid.
+#[test]
+fn apply_end_exactly_at_view_length_is_valid() {
+    let view = view_of(b"abc");
+    // normalised length is 3; 3..3 is an empty append at the end
+    let fork = view.apply(3..3, b"!").unwrap();
+    assert_eq!(mat(&fork), b"abc!");
+}

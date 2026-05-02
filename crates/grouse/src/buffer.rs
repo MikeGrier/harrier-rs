@@ -334,7 +334,13 @@ impl Buffer {
         // UTF-16LE/BE sources are rejected at Buffer construction, so any
         // encoding that reaches here and is not ASCII-compatible is treated
         // as opaque (leave bytes as-is) for safety.
-        let ascii_compatible = std::ptr::eq(self.encoding, encoding_rs::UTF_8) || self.encoding.is_single_byte();
+        //
+        // `is_ascii_compatible()` returns true for UTF-8, all single-byte
+        // encodings, and ASCII-superset MBCS encodings (Shift_JIS, Big5,
+        // GB18030, EUC-JP, EUC-KR, etc.) — i.e. every encoding where 0x0D
+        // and 0x0A can only appear as standalone single bytes and never as
+        // part of a larger code unit.
+        let ascii_compatible = self.encoding.is_ascii_compatible();
         let normalised = if ascii_compatible {
             let mut out = Vec::with_capacity(raw.len());
             let mut i = 0;
@@ -414,11 +420,13 @@ impl Buffer {
         // e.g. `0D 00 0A 00`, and rewriting individual `0x0D`/`0x0A` bytes
         // would produce invalid sequences and corrupt the resulting `View`.
         //
-        // For non-ASCII-compatible encodings we leave the bytes untouched;
-        // callers that need normalised line endings on multi-byte sources
-        // must decode through the encoding first.
-        let ascii_compatible =
-            self.encoding == encoding_rs::UTF_8 || self.encoding.is_single_byte();
+        // `is_ascii_compatible()` returns true for UTF-8, all single-byte
+        // encodings, and ASCII-superset MBCS encodings (Shift_JIS, Big5,
+        // GB18030, EUC-JP, EUC-KR, etc.) — i.e. every encoding where 0x0D
+        // and 0x0A can only appear as standalone single bytes.  UTF-16LE/BE
+        // are already blocked at Buffer construction, but `is_ascii_compatible()`
+        // would correctly return false for them in any case.
+        let ascii_compatible = self.encoding.is_ascii_compatible();
         let normalised = if ascii_compatible {
             let mut out = Vec::with_capacity(raw.len());
             let mut i = 0;
