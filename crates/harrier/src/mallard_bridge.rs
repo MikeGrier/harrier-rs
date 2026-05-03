@@ -2,7 +2,7 @@
 
 //! Bridge between harrier and mallard.
 //!
-//! [`GrouseLineSource`] implements [`mallard::LineSource`] for a harrier
+//! [`HarrierLineSource`] implements [`mallard::LineSource`] for a harrier
 //! [`Lines`] iterator, making it possible to populate a mallard
 //! [`LineBuffer`](mallard::LineBuffer) directly from any harrier-opened
 //! source without going through an intermediate file.
@@ -13,14 +13,14 @@
 //! replayed by [`LineSource::for_each_line`], which requires only a shared
 //! reference.
 //!
-//! [`GrouseEncodingValidator`] implements [`mallard::EncodingValidator`] for
+//! [`HarrierEncodingValidator`] implements [`mallard::EncodingValidator`] for
 //! any `&'static Encoding` from `encoding_rs`.  It uses harrier's
 //! `can_encode_with` to test whether a given line can round-trip through the
 //! target encoding, with an ASCII fast-path that avoids any allocation.
 //!
-//! [`from_grouse`] is a convenience constructor that combines both: it accepts
+//! [`from_harrier`] is a convenience constructor that combines both: it accepts
 //! a harrier [`Source`](crate::source::Source), converts it to a
-//! [`GrouseLineSource`], installs a [`GrouseEncodingValidator`] as the primary
+//! [`HarrierLineSource`], installs a [`HarrierEncodingValidator`] as the primary
 //! validator, and returns a fully-populated [`mallard::LineBuffer`].
 
 use std::sync::Arc;
@@ -34,7 +34,7 @@ use crate::{
     source::Source,
 };
 
-// ── GrouseLineSource ──────────────────────────────────────────────────────────
+// ── HarrierLineSource ──────────────────────────────────────────────────────────
 
 /// A [`LineSource`] backed by a harrier [`Lines`] iterator.
 ///
@@ -42,12 +42,12 @@ use crate::{
 /// the source encoding to UTF-8 and stripping its line terminator.  The
 /// resulting owned strings are replayed by [`for_each_line`].
 ///
-/// [`for_each_line`]: GrouseLineSource::for_each_line
-pub struct GrouseLineSource {
+/// [`for_each_line`]: HarrierLineSource::for_each_line
+pub struct HarrierLineSource {
     lines: Vec<String>,
 }
 
-impl GrouseLineSource {
+impl HarrierLineSource {
     /// Consume `lines`, decode every line from the source encoding to UTF-8,
     /// strip terminators, and store the results.
     ///
@@ -88,11 +88,11 @@ impl GrouseLineSource {
                 decoded.into_owned()
             })
             .collect();
-        GrouseLineSource { lines: collected }
+        HarrierLineSource { lines: collected }
     }
 }
 
-impl LineSource for GrouseLineSource {
+impl LineSource for HarrierLineSource {
     fn line_count_hint(&self) -> Option<usize> {
         Some(self.lines.len())
     }
@@ -104,7 +104,7 @@ impl LineSource for GrouseLineSource {
     }
 }
 
-// ── GrouseEncodingValidator ───────────────────────────────────────────────────
+// ── HarrierEncodingValidator ───────────────────────────────────────────────────
 
 /// An [`EncodingValidator`] that ensures every line can be faithfully
 /// represented in a specific `encoding_rs` encoding.
@@ -114,16 +114,16 @@ impl LineSource for GrouseLineSource {
 /// input.  `Ok(true)` → accept; `Ok(false)` or `Err` → reject with a
 /// descriptive [`EncodingError`].
 ///
-/// `GrouseEncodingValidator` is `Send + Sync` because `&'static Encoding` is
+/// `HarrierEncodingValidator` is `Send + Sync` because `&'static Encoding` is
 /// both.
-pub struct GrouseEncodingValidator {
+pub struct HarrierEncodingValidator {
     encoding: &'static Encoding,
 }
 
-impl GrouseEncodingValidator {
+impl HarrierEncodingValidator {
     /// Create a validator that enforces `encoding`.
     pub fn new(encoding: &'static Encoding) -> Self {
-        GrouseEncodingValidator { encoding }
+        HarrierEncodingValidator { encoding }
     }
 
     /// The encoding this validator enforces.
@@ -132,7 +132,7 @@ impl GrouseEncodingValidator {
     }
 }
 
-impl EncodingValidator for GrouseEncodingValidator {
+impl EncodingValidator for HarrierEncodingValidator {
     fn validate(&self, line: &str) -> Result<(), EncodingError> {
         match can_encode_with(self.encoding, line) {
             Ok(true) => Ok(()),
@@ -172,10 +172,10 @@ impl EncodingValidator for ChainedValidator {
     }
 }
 
-// ── from_grouse ───────────────────────────────────────────────────────────────
+// ── from_harrier ───────────────────────────────────────────────────────────────
 
 /// Convenience constructor: open a harrier [`Source`], decode all lines into a
-/// mallard [`LineBuffer`], and install a [`GrouseEncodingValidator`] so that
+/// mallard [`LineBuffer`], and install a [`HarrierEncodingValidator`] so that
 /// future edits are constrained to the source encoding.
 ///
 /// # Parameters
@@ -183,7 +183,7 @@ impl EncodingValidator for ChainedValidator {
 /// - `source` — a fully-probed harrier `Source` (encoding and line-ending
 ///   already resolved).
 /// - `extra` — an optional *additional* validator that is run after the
-///   `GrouseEncodingValidator`.  Pass `None` when only encoding enforcement
+///   `HarrierEncodingValidator`.  Pass `None` when only encoding enforcement
 ///   is needed.
 ///
 /// # Errors
@@ -191,7 +191,7 @@ impl EncodingValidator for ChainedValidator {
 /// Returns `Err(EncodingError)` when any line from `source` fails validation.
 /// Because the lines are decoded from `source`'s own encoding, this only
 /// happens when `extra` rejects a line.
-pub fn from_grouse(
+pub fn from_harrier(
     source: Source,
     extra: Option<Arc<dyn EncodingValidator>>,
 ) -> Result<LineBuffer, EncodingError> {
@@ -199,9 +199,9 @@ pub fn from_grouse(
     let lines = source
         .as_lines()
         .expect("Source::as_lines is currently infallible");
-    let line_source = GrouseLineSource::new(lines);
+    let line_source = HarrierLineSource::new(lines);
 
-    let primary: Arc<dyn EncodingValidator> = Arc::new(GrouseEncodingValidator::new(encoding));
+    let primary: Arc<dyn EncodingValidator> = Arc::new(HarrierEncodingValidator::new(encoding));
     let validator: Arc<dyn EncodingValidator> = match extra {
         None => primary,
         Some(v) => Arc::new(ChainedValidator {
