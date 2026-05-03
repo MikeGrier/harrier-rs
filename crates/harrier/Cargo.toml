@@ -2,11 +2,11 @@
 
 [package]
 name = "harrier"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A line-map and character-encoding-aware red-green tree for structured, lossless, incrementally-editable text"
 license = "MIT"
-repository = "https://github.com/MikeGrier/weaver-rs"
+repository = "https://github.com/MikeGrier/harrier-rs"
 readme = "README.md"
 keywords = ["text", "lsp", "encoding", "line-map", "red-green-tree"]
 categories = ["text-processing", "parsing"]
