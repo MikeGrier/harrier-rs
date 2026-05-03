@@ -3,12 +3,12 @@
 //! ML-54: Unit tests for `harrier::mallard_bridge`.
 //!
 //! Covers:
-//!   - `from_grouse`: line count, content, terminator stripping, multi-byte
+//!   - `from_harrier`: line count, content, terminator stripping, multi-byte
 //!     encoding decoding, optional extra validator, empty and single-line edge cases.
-//!   - `GrouseEncodingValidator`: ASCII fast-path, UTF-8 acceptance, rejection
+//!   - `HarrierEncodingValidator`: ASCII fast-path, UTF-8 acceptance, rejection
 //!     of non-Latin-1 content under Windows-1252, acceptance of Latin-1 content,
 //!     empty-string acceptance.
-//!   - `GrouseLineSource`: line-count hint and ordering.
+//!   - `HarrierLineSource`: line-count hint and ordering.
 //!   - Buffer-level validation: inserting lines into a buffer built from a
 //!     Windows-1252 source enforces the encoding constraint at edit time.
 
@@ -21,7 +21,7 @@ use redwing::make_thicket_from_bytes;
 use crate::{
     encoding::{BomPolicy, SourceConfig},
     lines::Lines,
-    mallard_bridge::{from_grouse, GrouseEncodingValidator, GrouseLineSource},
+    mallard_bridge::{from_harrier, HarrierEncodingValidator, HarrierLineSource},
     source::Source,
 };
 
@@ -44,13 +44,13 @@ fn make_lines(bytes: impl Into<Vec<u8>>, encoding: &'static encoding_rs::Encodin
     make_source(bytes, encoding).as_lines().unwrap()
 }
 
-// ── from_grouse: line count and content ───────────────────────────────────────
+// ── from_harrier: line count and content ───────────────────────────────────────
 
 /// 1. Three LF-terminated UTF-8 lines: count and content are correct.
 #[test]
-fn from_grouse_utf8_lf_three_lines() {
+fn from_harrier_utf8_lf_three_lines() {
     let src = make_source(b"alpha\nbeta\ngamma\n", UTF_8);
-    let lb = from_grouse(src, None).unwrap();
+    let lb = from_harrier(src, None).unwrap();
     assert_eq!(lb.line_count(), 3);
     assert_eq!(lb.get_line(0).as_deref(), Some("alpha"));
     assert_eq!(lb.get_line(1).as_deref(), Some("beta"));
@@ -59,9 +59,9 @@ fn from_grouse_utf8_lf_three_lines() {
 
 /// 2. Three CRLF-terminated UTF-8 lines: `\r` is stripped alongside `\n`.
 #[test]
-fn from_grouse_utf8_crlf_three_lines() {
+fn from_harrier_utf8_crlf_three_lines() {
     let src = make_source(b"one\r\ntwo\r\nthree\r\n", UTF_8);
-    let lb = from_grouse(src, None).unwrap();
+    let lb = from_harrier(src, None).unwrap();
     assert_eq!(lb.line_count(), 3);
     assert_eq!(lb.get_line(0).as_deref(), Some("one"));
     assert_eq!(lb.get_line(1).as_deref(), Some("two"));
@@ -70,59 +70,59 @@ fn from_grouse_utf8_crlf_three_lines() {
 
 /// 3. Empty source (zero bytes) → LineBuffer with zero lines.
 #[test]
-fn from_grouse_empty_source() {
+fn from_harrier_empty_source() {
     let src = make_source(b"", UTF_8);
-    let lb = from_grouse(src, None).unwrap();
+    let lb = from_harrier(src, None).unwrap();
     assert_eq!(lb.line_count(), 0);
     assert!(lb.get_line(0).is_none());
 }
 
 /// 4. Single line with no trailing newline → one line, content intact.
 #[test]
-fn from_grouse_single_line_no_newline() {
+fn from_harrier_single_line_no_newline() {
     let src = make_source(b"hello world", UTF_8);
-    let lb = from_grouse(src, None).unwrap();
+    let lb = from_harrier(src, None).unwrap();
     assert_eq!(lb.line_count(), 1);
     assert_eq!(lb.get_line(0).as_deref(), Some("hello world"));
 }
 
 /// 5. Single line with trailing LF: one line, LF stripped.
 #[test]
-fn from_grouse_single_line_with_lf() {
+fn from_harrier_single_line_with_lf() {
     let src = make_source(b"hello\n", UTF_8);
-    let lb = from_grouse(src, None).unwrap();
+    let lb = from_harrier(src, None).unwrap();
     assert_eq!(lb.line_count(), 1);
     assert_eq!(lb.get_line(0).as_deref(), Some("hello"));
 }
 
 /// 6. Multi-byte UTF-8 characters (Japanese) pass through intact.
 #[test]
-fn from_grouse_utf8_multibyte_characters() {
+fn from_harrier_utf8_multibyte_characters() {
     // "東京\n大阪\n" — Japanese, entirely multi-byte UTF-8.
     let src = make_source("東京\n大阪\n".as_bytes(), UTF_8);
-    let lb = from_grouse(src, None).unwrap();
+    let lb = from_harrier(src, None).unwrap();
     assert_eq!(lb.line_count(), 2);
     assert_eq!(lb.get_line(0).as_deref(), Some("東京"));
     assert_eq!(lb.get_line(1).as_deref(), Some("大阪"));
 }
 
-/// 7. Windows-1252 bytes are decoded to the correct UTF-8 by `from_grouse`.
+/// 7. Windows-1252 bytes are decoded to the correct UTF-8 by `from_harrier`.
 ///
 /// 0xE9 = 'é' in Windows-1252; the resulting LineBuffer line must be "café".
 #[test]
-fn from_grouse_windows_1252_decoded_to_utf8() {
+fn from_harrier_windows_1252_decoded_to_utf8() {
     // "caf\xE9\n" in Windows-1252 → "café"
     let src = make_source(b"caf\xe9\n", WINDOWS_1252);
-    let lb = from_grouse(src, None).unwrap();
+    let lb = from_harrier(src, None).unwrap();
     assert_eq!(lb.line_count(), 1);
     assert_eq!(lb.get_line(0).as_deref(), Some("café"));
 }
 
 /// 8. Five blank lines (just LFs): count and empty content.
 #[test]
-fn from_grouse_all_blank_lines() {
+fn from_harrier_all_blank_lines() {
     let src = make_source(b"\n\n\n\n\n", UTF_8);
-    let lb = from_grouse(src, None).unwrap();
+    let lb = from_harrier(src, None).unwrap();
     assert_eq!(lb.line_count(), 5);
     for i in 0..5 {
         assert_eq!(
@@ -135,16 +135,16 @@ fn from_grouse_all_blank_lines() {
 
 /// 9. Line at boundary of out-of-range access returns None.
 #[test]
-fn from_grouse_out_of_range_returns_none() {
+fn from_harrier_out_of_range_returns_none() {
     let src = make_source(b"only\n", UTF_8);
-    let lb = from_grouse(src, None).unwrap();
+    let lb = from_harrier(src, None).unwrap();
     assert_eq!(lb.line_count(), 1);
     assert!(lb.get_line(1).is_none());
 }
 
-/// 10. `from_grouse` with an extra validator that accepts: no error, line present.
+/// 10. `from_harrier` with an extra validator that accepts: no error, line present.
 #[test]
-fn from_grouse_with_accepting_extra_validator() {
+fn from_harrier_with_accepting_extra_validator() {
     use mallard::EncodingError;
 
     struct AlwaysOk;
@@ -155,14 +155,14 @@ fn from_grouse_with_accepting_extra_validator() {
     }
 
     let src = make_source(b"line1\nline2\n", UTF_8);
-    let lb = from_grouse(src, Some(Arc::new(AlwaysOk))).unwrap();
+    let lb = from_harrier(src, Some(Arc::new(AlwaysOk))).unwrap();
     assert_eq!(lb.line_count(), 2);
     assert_eq!(lb.get_line(0).as_deref(), Some("line1"));
 }
 
-/// 11. `from_grouse` with an extra validator that rejects: returns Err.
+/// 11. `from_harrier` with an extra validator that rejects: returns Err.
 #[test]
-fn from_grouse_with_rejecting_extra_validator() {
+fn from_harrier_with_rejecting_extra_validator() {
     use mallard::EncodingError;
 
     struct AlwaysReject;
@@ -176,19 +176,19 @@ fn from_grouse_with_rejecting_extra_validator() {
     }
 
     let src = make_source(b"blocked\n", UTF_8);
-    let result = from_grouse(src, Some(Arc::new(AlwaysReject)));
+    let result = from_harrier(src, Some(Arc::new(AlwaysReject)));
     assert!(
         result.is_err(),
         "extra validator should have caused rejection"
     );
 }
 
-// ── GrouseEncodingValidator ───────────────────────────────────────────────────
+// ── HarrierEncodingValidator ───────────────────────────────────────────────────
 
 /// 12. Validator accepts pure ASCII with any encoding.
 #[test]
 fn validator_accepts_pure_ascii() {
-    let v = GrouseEncodingValidator::new(WINDOWS_1252);
+    let v = HarrierEncodingValidator::new(WINDOWS_1252);
     assert!(v.validate("Hello, world!").is_ok());
     assert!(v.validate("").is_ok());
     assert!(v.validate("abcdefghijklmnopqrstuvwxyz 0123456789").is_ok());
@@ -197,7 +197,7 @@ fn validator_accepts_pure_ascii() {
 /// 13. Validator with UTF-8 encoding accepts any valid UTF-8 content.
 #[test]
 fn validator_utf8_accepts_unicode() {
-    let v = GrouseEncodingValidator::new(UTF_8);
+    let v = HarrierEncodingValidator::new(UTF_8);
     assert!(v.validate("Hello, 世界!").is_ok());
     assert!(v.validate("Привет мир").is_ok());
     assert!(v.validate("😀🎉").is_ok());
@@ -206,7 +206,7 @@ fn validator_utf8_accepts_unicode() {
 /// 14. Validator with Windows-1252 accepts Latin-1-encodable characters.
 #[test]
 fn validator_windows_1252_accepts_latin1() {
-    let v = GrouseEncodingValidator::new(WINDOWS_1252);
+    let v = HarrierEncodingValidator::new(WINDOWS_1252);
     // All of these are representable in Windows-1252.
     assert!(v.validate("café").is_ok());
     assert!(v.validate("naïve").is_ok());
@@ -217,7 +217,7 @@ fn validator_windows_1252_accepts_latin1() {
 /// 15. Validator with Windows-1252 rejects characters outside its range.
 #[test]
 fn validator_windows_1252_rejects_non_latin1() {
-    let v = GrouseEncodingValidator::new(WINDOWS_1252);
+    let v = HarrierEncodingValidator::new(WINDOWS_1252);
     // Japanese, Chinese, emoji — none are representable in Windows-1252.
     assert!(v.validate("東京").is_err(), "Japanese should be rejected");
     assert!(v.validate("Привет").is_err(), "Cyrillic should be rejected");
@@ -227,7 +227,7 @@ fn validator_windows_1252_rejects_non_latin1() {
 /// 16. Error message from validator contains the encoding name.
 #[test]
 fn validator_error_contains_encoding_name() {
-    let v = GrouseEncodingValidator::new(WINDOWS_1252);
+    let v = HarrierEncodingValidator::new(WINDOWS_1252);
     let err = v.validate("東京").unwrap_err();
     let desc = err.description.as_ref();
     assert!(
@@ -236,13 +236,13 @@ fn validator_error_contains_encoding_name() {
     );
 }
 
-// ── GrouseLineSource ──────────────────────────────────────────────────────────
+// ── HarrierLineSource ──────────────────────────────────────────────────────────
 
 /// 17. `line_count_hint` matches actual line count.
 #[test]
 fn line_source_count_hint_matches() {
     let lines = make_lines(b"a\nb\nc\n", UTF_8);
-    let src = GrouseLineSource::new(lines);
+    let src = HarrierLineSource::new(lines);
     let hint = src.line_count_hint();
     assert_eq!(hint, Some(3));
     let mut count = 0;
@@ -254,7 +254,7 @@ fn line_source_count_hint_matches() {
 #[test]
 fn line_source_order_preserved() {
     let lines = make_lines(b"first\nsecond\nthird\n", UTF_8);
-    let src = GrouseLineSource::new(lines);
+    let src = HarrierLineSource::new(lines);
     let mut collected: Vec<String> = Vec::new();
     src.for_each_line(&mut |l| collected.push(l.to_string()));
     assert_eq!(collected, ["first", "second", "third"]);
@@ -263,12 +263,12 @@ fn line_source_order_preserved() {
 // ── Buffer-level validation at edit time ──────────────────────────────────────
 
 /// 19. A LineBuffer built from a Windows-1252 source rejects non-Latin-1
-///     content at `insert_line` time (GrouseEncodingValidator is installed).
+///     content at `insert_line` time (HarrierEncodingValidator is installed).
 #[test]
 fn edit_windows_1252_buffer_rejects_non_latin1_insert() {
-    // Build a source with valid Windows-1252 text, load it via from_grouse.
+    // Build a source with valid Windows-1252 text, load it via from_harrier.
     let src = make_source(b"hello\n", WINDOWS_1252);
-    let mut lb = from_grouse(src, None).unwrap();
+    let mut lb = from_harrier(src, None).unwrap();
     assert_eq!(lb.line_count(), 1);
 
     // Inserting a Latin-1-safe string succeeds.
@@ -286,7 +286,7 @@ fn edit_windows_1252_buffer_rejects_non_latin1_insert() {
 #[test]
 fn edit_utf8_buffer_accepts_any_unicode_insert() {
     let src = make_source(b"start\n", UTF_8);
-    let mut lb = from_grouse(src, None).unwrap();
+    let mut lb = from_harrier(src, None).unwrap();
 
     assert!(lb.insert_line(1, "日本語").is_ok());
     assert!(lb.insert_line(2, "emoji: 🦆").is_ok());
