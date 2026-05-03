@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use encoding_rs::UTF_8;
-use weaver::{
+use harrier::{
     buffer::Buffer,
     encoding::{BomPolicy, SourceConfig},
     source::Source,

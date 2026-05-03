@@ -146,7 +146,7 @@ pub(crate) fn sync_kind(encoding: &'static Encoding) -> SyncKind {
 /// `Chars` wraps a fully-resolved [`Source`] and exposes character-level
 /// services without building a line map.  It is the correct choice when the
 /// caller is a parser crate that manages its own tree structure and only needs
-/// weaver's encoding detection, sync-point, and re-encoding services.
+/// harrier's encoding detection, sync-point, and re-encoding services.
 ///
 /// ## Sync-point model
 ///

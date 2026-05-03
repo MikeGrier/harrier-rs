@@ -1,6 +1,6 @@
 // Copyright (c) 2026, Michael Grier
 
-//! ML-54: Unit tests for `weaver::mallard_bridge`.
+//! ML-54: Unit tests for `harrier::mallard_bridge`.
 //!
 //! Covers:
 //!   - `from_grouse`: line count, content, terminator stripping, multi-byte

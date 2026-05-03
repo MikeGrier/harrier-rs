@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use encoding_rs::{UTF_16LE, UTF_8};
-use weaver::{
+use harrier::{
     encoding::{BomPolicy, SourceConfig},
     source::Source,
 };
@@ -25,7 +25,7 @@ fn branch(bytes: impl Into<Vec<u8>>) -> Arc<dyn Branch> {
     make_thicket_from_bytes(bytes.into()).main()
 }
 
-fn make_source(bytes: Vec<u8>, enc: &'static encoding_rs::Encoding) -> weaver::source::Source {
+fn make_source(bytes: Vec<u8>, enc: &'static encoding_rs::Encoding) -> harrier::source::Source {
     let config = SourceConfig {
         encoding_hint: Some(enc),
         bom_policy: BomPolicy::Ignore,
@@ -95,7 +95,7 @@ fn utf8_chars_from_at_each_boundary() {
 /// characters; decoding the bytes back must give the original string.
 #[test]
 fn utf8_encode_round_trip() {
-    use weaver::encoded::Encoded;
+    use harrier::encoded::Encoded;
     let input = "Hello, 世界! é à ü 🦊";
     let src = make_source(b"placeholder".to_vec(), UTF_8);
     let chars = src.as_chars().expect("as_chars");
@@ -179,7 +179,7 @@ fn utf16le_surrogate_pair_chars_from() {
 /// to the original string.
 #[test]
 fn utf16le_encode_round_trip() {
-    use weaver::encoded::Encoded;
+    use harrier::encoded::Encoded;
     let input = "Hello, World!";
     let src = make_source(to_utf16le(input), UTF_16LE);
     let chars = src.as_chars().expect("as_chars");
@@ -282,7 +282,7 @@ fn shift_jis_full_iteration_matches_expected() {
 /// encode round-trip in Shift_JIS: ASCII content stays ASCII.
 #[test]
 fn shift_jis_encode_round_trip_ascii() {
-    use weaver::encoded::Encoded;
+    use harrier::encoded::Encoded;
     let input = "Hello, Shift_JIS!\n";
     let src = make_source(to_shift_jis(input), encoding_rs::SHIFT_JIS);
     let chars = src.as_chars().expect("as_chars");

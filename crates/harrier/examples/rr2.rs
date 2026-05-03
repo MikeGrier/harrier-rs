@@ -1,6 +1,6 @@
 // Copyright (c) 2026, Michael Grier
 
-//! `rr2` — in-place regex substitution using weaver's normalised-view infrastructure.
+//! `rr2` — in-place regex substitution using harrier's normalised-view infrastructure.
 //!
 //! Usage (file mode):
 //!     rr2 <file> <pattern> <replacement>
@@ -18,10 +18,10 @@
 //! The program:
 //!   1. Opens `<file>` and memory-maps it.
 //!   2. Wraps the map in a redwing thicket; `b1` is the initial read-only branch.
-//!   3. Opens the branch with [`weaver::source::Source`] to detect encoding,
+//!   3. Opens the branch with [`harrier::source::Source`] to detect encoding,
 //!      BOM, and the dominant line-ending convention.
 //!   4. Materialises the entire file as a normalised (LF-only) [`View`] via
-//!      [`weaver::lines::Lines::view_range`].
+//!      [`harrier::lines::Lines::view_range`].
 //!   5. Runs the regex over the normalised bytes and collects every match as
 //!      a source-coordinate splice descriptor.  Each replacement template is
 //!      expanded (capture groups resolved) in normalised space and then
@@ -60,7 +60,7 @@
 //! `.bak` rename, since no original source exists to preserve.
 use std::{env, fs, io::Write as _, path::PathBuf, sync::Arc};
 
-use weaver::{
+use harrier::{
     denormalise::DenormaliseWriter,
     encoding::{LineEnding, SourceConfig},
     source::Source,
@@ -259,7 +259,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let file_len = b1.byte_len();
 
-    // ── open with weaver to detect encoding and line-ending ───────────────────
+    // ── open with harrier to detect encoding and line-ending ───────────────────
 
     let source = Source::new(Arc::clone(&b1), SourceConfig::default())?;
     let line_ending = source.line_ending();

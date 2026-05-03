@@ -17,7 +17,7 @@
 use std::{io::Write, sync::Arc};
 
 use encoding_rs::UTF_8;
-use weaver::{
+use harrier::{
     denormalise::DenormaliseWriter,
     encoding::{BomPolicy, LineEnding, SourceConfig},
     lines::{LineTerminator, Lines, TerminatorLog},
