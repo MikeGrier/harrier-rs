@@ -321,16 +321,28 @@ fn resolve_encoding_no_bom(
     // UTF-8 (U+0000) and would otherwise be mislabelled UTF-8 here. Real
     // UTF-8 *text* essentially never contains U+0000, so excluding it from
     // the fast path costs nothing and keeps UTF-16 handling intact.
-    if config.prefer_utf8_when_valid && !probe.contains(&0) && probe_is_well_formed_utf8(probe) {
-        // The probe is well-formed UTF-8. When the caller opted into
-        // full-stream validation, confirm the *entire* branch is well-formed
-        // UTF-8 before committing — this is the only path that reads beyond
-        // the probe window. Otherwise the probe alone is sufficient.
-        if !config.validate_full_stream_utf8 || branch_is_well_formed_utf8(branch)? {
+    if config.prefer_utf8_when_valid && !probe.contains(&0) {
+        // When the probe spans the *entire* branch there is no further data to
+        // come, so a truncated trailing multi-byte sequence is genuinely
+        // malformed UTF-8 (e.g. a lone `0xE2` is cp1252 `â`, not UTF-8) and
+        // must be rejected. Only when the probe is a true *prefix* of a longer
+        // stream do we tolerate a sequence cut off at the probe boundary.
+        let probe_spans_branch = probe.len() as u64 >= branch.byte_len();
+        let probe_ok = if probe_spans_branch {
+            std::str::from_utf8(probe).is_ok()
+        } else {
+            probe_is_well_formed_utf8(probe)
+        };
+
+        // When the caller opted into full-stream validation, confirm the
+        // *entire* branch is well-formed UTF-8 before committing — this is the
+        // only path that reads beyond the probe window. Otherwise the probe
+        // (validated above) is sufficient.
+        if probe_ok && (!config.validate_full_stream_utf8 || branch_is_well_formed_utf8(branch)?) {
             return Ok(encoding_rs::UTF_8);
         }
-        // Full-stream validation found a non-UTF-8 byte past the probe
-        // window; fall through to the heuristic detector below.
+        // Not well-formed UTF-8 (or full-stream validation found a non-UTF-8
+        // byte past the probe window); fall through to the heuristic detector.
     }
 
     // Not valid UTF-8 (or opted out) — fall back to the heuristic detector
@@ -398,14 +410,16 @@ pub(crate) fn branch_is_well_formed_utf8(branch: &Arc<dyn Branch>) -> Result<boo
     // leftover bytes of a sequence split across the previous boundary; they sit
     // at the front of `buf` and are validated together with the next read. The
     // buffer is sized to the smaller of the branch length and one chunk so that
-    // validating a small stream does not allocate a full chunk.
-    let cap = MAX_CARRY + (len as usize).min(CHUNK_LEN);
+    // validating a small stream does not allocate a full chunk. The `min` is
+    // taken in `u64` *before* the cast so a >4 GiB branch cannot truncate on a
+    // 32-bit target.
+    let cap = MAX_CARRY + len.min(CHUNK_LEN as u64) as usize;
     let mut buf = vec![0u8; cap];
     let mut carry = 0usize;
     let mut offset: u64 = 0;
 
     while offset < len {
-        let want = ((len - offset) as usize).min(CHUNK_LEN);
+        let want = (len - offset).min(CHUNK_LEN as u64) as usize;
         let n = branch.read_at(offset, &mut buf[carry..carry + want])?;
         if n == 0 {
             // Defensive: a compliant branch fills the request before EOF.

@@ -361,6 +361,18 @@ fn truncated_trailing_sequence_at_probe_boundary_is_still_utf8() {
     assert_eq!(src.encoding(), UTF_8);
 }
 
+// 22b. A truncated trailing sequence at *true* end-of-file (the probe spans the
+//      whole branch) is malformed UTF-8 and must route through the heuristic —
+//      it must NOT be force-classified UTF-8 by the probe-prefix tolerance.
+#[test]
+fn truncated_trailing_sequence_at_true_eof_is_not_utf8() {
+    // A lone `0xE2` is the lead byte of a 3-byte sequence with no continuation
+    // bytes: well-formed only as a *prefix*, malformed at real EOF. In cp1252
+    // it is `â`. With the whole branch present, it must not be classified UTF-8.
+    let src = Source::new(branch(vec![0xE2]), SourceConfig::default()).unwrap();
+    assert_ne!(src.encoding(), UTF_8);
+}
+
 // 23. Genuine windows-1252 (a lone high byte, invalid as UTF-8) still routes
 //     through the heuristic detector.
 #[test]
