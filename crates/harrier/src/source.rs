@@ -326,12 +326,14 @@ fn resolve_encoding_no_bom(
         // come, so a truncated trailing multi-byte sequence is genuinely
         // malformed UTF-8 (e.g. a lone `0xE2` is cp1252 `â`, not UTF-8) and
         // must be rejected. Only when the probe is a true *prefix* of a longer
-        // stream do we tolerate a sequence cut off at the probe boundary.
+        // stream do we tolerate a sequence cut off at the probe boundary — and
+        // even then only if the bytes immediately past the boundary actually
+        // complete it as valid UTF-8 (see `prefix_is_well_formed_utf8`).
         let probe_spans_branch = probe.len() as u64 >= branch.byte_len();
         let probe_ok = if probe_spans_branch {
             std::str::from_utf8(probe).is_ok()
         } else {
-            probe_is_well_formed_utf8(probe)
+            prefix_is_well_formed_utf8(branch, probe)?
         };
 
         // When the caller opted into full-stream validation, confirm the
@@ -376,6 +378,64 @@ pub(crate) fn probe_is_well_formed_utf8(probe: &[u8]) -> bool {
         Ok(_) => true,
         Err(e) => e.error_len().is_none(),
     }
+}
+
+/// Returns `true` when `probe` — a true *prefix* of `branch` — is well-formed
+/// UTF-8, tolerating a single multi-byte sequence cut off at the probe boundary
+/// **only** when the bytes immediately following the probe actually complete it
+/// as valid UTF-8.
+///
+/// [`probe_is_well_formed_utf8`] on its own accepts any probe that ends on a
+/// lone UTF-8 lead byte ("unexpected end of input"). That is too permissive for
+/// the detection gate: a single-byte stream whose probe happens to end on a
+/// byte that *looks* like a UTF-8 lead (e.g. windows-1252 text where byte 8191
+/// is `0xE9` and byte 8192 is ASCII) would be force-classified as UTF-8 and
+/// decoded with substitutions. To avoid that, when the probe ends mid-sequence
+/// we peek exactly the bytes (≤3) needed to finish the code point and validate
+/// the completed sequence against the real stream; if it does not complete
+/// cleanly we report `false` and let the heuristic detector decide.
+fn prefix_is_well_formed_utf8(branch: &Arc<dyn Branch>, probe: &[u8]) -> Result<bool, SourceError> {
+    // A genuine mid-stream decode error means the stream is not UTF-8. This
+    // also accepts a probe that is fully valid or valid except for a single
+    // truncated trailing sequence (the prefix tolerance we now tighten below).
+    if !probe_is_well_formed_utf8(probe) {
+        return Ok(false);
+    }
+
+    // Locate where validity ends. `Ok` means there is no truncated tail to
+    // worry about; otherwise `valid_up_to` is the start of the cut sequence.
+    let valid_up_to = match std::str::from_utf8(probe) {
+        Ok(_) => return Ok(true),
+        Err(e) => e.valid_up_to(),
+    };
+
+    // The bytes of the truncated sequence that were captured inside the probe.
+    let tail = &probe[valid_up_to..];
+    // The lead byte dictates the full sequence length (2–4 bytes). A lead the
+    // standard library reported as merely "incomplete" is always one of these;
+    // anything else would have produced a hard error rejected above.
+    let needed = match tail[0] {
+        0xC2..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF4 => 4,
+        _ => return Ok(false),
+    };
+    let missing = needed - tail.len();
+
+    // Peek exactly the missing bytes from just past the probe boundary.
+    let mut extra = vec![0u8; missing];
+    let got = branch.read_at(probe.len() as u64, &mut extra)?;
+    if got < missing {
+        // The sequence is truncated at true end-of-file → malformed UTF-8.
+        return Ok(false);
+    }
+
+    // Validate just the completed code point (this also rejects overlong
+    // encodings, surrogates, and invalid continuation bytes).
+    let mut completed = Vec::with_capacity(needed);
+    completed.extend_from_slice(tail);
+    completed.extend_from_slice(&extra);
+    Ok(std::str::from_utf8(&completed).is_ok())
 }
 
 /// Returns `true` when the *entire* branch is well-formed UTF-8 and contains

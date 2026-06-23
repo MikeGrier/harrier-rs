@@ -373,6 +373,23 @@ fn truncated_trailing_sequence_at_true_eof_is_not_utf8() {
     assert_ne!(src.encoding(), UTF_8);
 }
 
+// 22c. A probe that ends on a lone UTF-8 *lead* byte whose continuation past the
+//      boundary is NOT a valid UTF-8 continuation (e.g. windows-1252 text where
+//      the probe cuts on 0xE9 followed by ASCII) must route through the
+//      heuristic — the prefix tolerance must not force-classify it as UTF-8.
+#[test]
+fn lone_lead_byte_at_probe_boundary_with_ascii_continuation_is_not_utf8() {
+    // ASCII fills the probe up to its final byte; byte PROBE_LEN-1 is 0xE9
+    // (cp1252 'é', also a 3-byte UTF-8 lead). The bytes immediately past the
+    // probe boundary are ASCII — invalid UTF-8 continuations — so peeking past
+    // the boundary must reject UTF-8 and defer to the heuristic detector.
+    let mut bytes = vec![b'a'; DEFAULT_PROBE_LEN - 1];
+    bytes.push(0xE9);
+    bytes.extend_from_slice(b" plain ascii tail");
+    let src = Source::new(branch(bytes), SourceConfig::default()).unwrap();
+    assert_ne!(src.encoding(), UTF_8);
+}
+
 // 23. Genuine windows-1252 (a lone high byte, invalid as UTF-8) still routes
 //     through the heuristic detector.
 #[test]

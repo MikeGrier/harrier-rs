@@ -411,8 +411,17 @@ impl Buffer {
             });
         }
 
+        // Guard the u64 → usize cast used for the allocation below. On 64-bit
+        // targets this is a no-op (usize == u64); on 32-bit targets it rejects
+        // a range too large to address in memory instead of silently
+        // truncating the buffer size.
+        let len_usize = usize::try_from(len).map_err(|_| BufferError::RangeExceedsCeiling {
+            requested: len,
+            ceiling: self.view_ceiling,
+        })?;
+
         // Read the raw source bytes.
-        let mut raw = vec![0u8; len as usize];
+        let mut raw = vec![0u8; len_usize];
         if len > 0 {
             self.branch
                 .read_at(byte_range.start, &mut raw)

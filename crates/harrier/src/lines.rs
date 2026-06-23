@@ -208,8 +208,17 @@ impl Lines {
             });
         }
 
+        // Guard the u64 → usize cast used for the allocations below. On 64-bit
+        // targets this is a no-op (usize == u64); on 32-bit targets it rejects
+        // a range too large to address in memory instead of silently
+        // truncating the buffer size.
+        let len_usize = usize::try_from(len).map_err(|_| LinesError::RangeExceedsCeiling {
+            requested: len,
+            ceiling: self.view_ceiling,
+        })?;
+
         // Read the raw source bytes.
-        let mut raw = vec![0u8; len as usize];
+        let mut raw = vec![0u8; len_usize];
         if len > 0 {
             self.branch.read_at(byte_range.start, &mut raw)?;
         }
@@ -218,7 +227,7 @@ impl Lines {
         let map = build_offset_map(self.branch.as_ref(), byte_range.clone())?;
 
         // Produce the normalised bytes: CRLF → LF, lone CR → LF.
-        let mut normalised = Vec::with_capacity(len as usize);
+        let mut normalised = Vec::with_capacity(len_usize);
         let mut i = 0;
         while i < raw.len() {
             match raw[i] {
