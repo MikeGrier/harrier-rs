@@ -319,11 +319,13 @@ fn apply_replacement_containing_crlf_stored_verbatim() {
 
 /// Inverted range (end < start) must return InvalidInput, not panic.
 #[test]
-#[allow(clippy::reversed_empty_ranges)] // the reversed range is the point of this test
 fn apply_inverted_range_returns_error() {
     let view = view_of(b"hello\n");
-    // start (4) > end (2)
-    let result = view.apply(4..2, b"x");
+    // start (4) > end (2). Build the range from values so the (intentional)
+    // inversion is a runtime condition, not a statically-reversed literal that
+    // trips the rustc/clippy `reversed_empty_ranges` lint.
+    let (start, end) = (4u64, 2u64);
+    let result = view.apply(start..end, b"x");
     assert!(result.is_err());
     let err = result.err().expect("expected Err");
     assert_eq!(
