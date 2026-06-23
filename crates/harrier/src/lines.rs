@@ -192,7 +192,15 @@ impl Lines {
     ///   [`self.view_ceiling`](DEFAULT_VIEW_CEILING).
     /// - [`LinesError::Io`] on any branch read error.
     pub fn view_range(&self, byte_range: Range<u64>) -> Result<View, LinesError> {
-        let len = byte_range.end.saturating_sub(byte_range.start);
+        // Clamp the requested range to the branch first: a caller that
+        // navigates off the end (or passes an inverted range) must never drive
+        // an out-of-bounds read, fabricate phantom trailing NUL bytes, or trip
+        // the ceiling check on a length larger than the file.
+        let branch_len = self.branch.byte_len();
+        let start = byte_range.start.min(branch_len);
+        let end = byte_range.end.clamp(start, branch_len);
+        let byte_range = start..end;
+        let len = end - start;
         if len > self.view_ceiling {
             return Err(LinesError::RangeExceedsCeiling {
                 requested: len,

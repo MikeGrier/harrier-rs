@@ -391,7 +391,19 @@ impl Buffer {
     ///
     /// [`OffsetMap`]: crate::offset_map::OffsetMap
     pub fn view_range(&self, byte_range: Range<u64>) -> Result<View, BufferError> {
-        let len = byte_range.end.saturating_sub(byte_range.start);
+        // Clamp the requested range to the branch before doing anything else.
+        // A caller that navigates off the end of the file (or passes an
+        // inverted range) must never be able to drive an out-of-bounds read,
+        // fabricate phantom trailing NUL bytes, or trip the ceiling check on a
+        // length larger than the file. `read_at` already short-reads past EOF,
+        // but clamping keeps the allocation, the ceiling check, and the offset
+        // map all sized to bytes that actually exist.
+        let branch_len = self.branch.byte_len();
+        let start = byte_range.start.min(branch_len);
+        let end = byte_range.end.clamp(start, branch_len);
+        let byte_range = start..end;
+        let len = end - start;
+
         if len > self.view_ceiling {
             return Err(BufferError::RangeExceedsCeiling {
                 requested: len,

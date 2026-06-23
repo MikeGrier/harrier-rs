@@ -358,3 +358,90 @@ fn encode_round_trips_ascii_shift_jis() {
     let bytes = chars.encode("hello\n").expect("encode");
     assert_eq!(bytes, b"hello\n");
 }
+
+// ── off-the-end / off-the-beginning / mojibake navigation ─────────────────────
+
+// 31. is_boundary at, and past, EOF (and on an empty branch) is a clean `true`
+//     for UTF-8 — never a spurious I/O error a caller might unwrap into a panic.
+#[test]
+fn utf8_is_boundary_at_and_past_eof_is_true() {
+    let chars = chars_with_encoding(b"A\xC3\xA9".to_vec(), UTF_8); // "Aé", 3 bytes
+    assert!(chars.is_boundary(3).unwrap()); // exactly EOF
+    assert!(chars.is_boundary(9_999).unwrap()); // far past EOF
+    let empty = chars_with_encoding(Vec::new(), UTF_8);
+    assert!(empty.is_boundary(0).unwrap());
+}
+
+// 32. nearest_sync_point past EOF clamps to the end and returns the start of the
+//     final character (UTF-8), rather than reading out of bounds.
+#[test]
+fn utf8_nearest_sync_point_past_eof_returns_last_char_start() {
+    let chars = chars_with_encoding(b"A\xC3\xA9".to_vec(), UTF_8); // 'A'=0, 'é'=1..3
+    assert_eq!(chars.nearest_sync_point(3).unwrap(), 1); // EOF position
+    assert_eq!(chars.nearest_sync_point(9_999).unwrap(), 1); // far past EOF
+}
+
+// 33. nearest_sync_point at the very beginning of the branch returns 0.
+#[test]
+fn nearest_sync_point_at_beginning_is_zero() {
+    let chars = chars_with_encoding(b"A\xC3\xA9".to_vec(), UTF_8);
+    assert_eq!(chars.nearest_sync_point(0).unwrap(), 0);
+}
+
+// 34. is_boundary with an extreme u64 offset must not overflow (UTF-16LE took
+//     `offset + 1` previously). Even and odd extremes both answer without panic.
+#[test]
+fn utf16le_is_boundary_extreme_offset_does_not_overflow() {
+    let chars = chars_with_encoding(vec![0x68, 0x00, 0x69, 0x00], UTF_16LE);
+    assert!(chars.is_boundary(u64::MAX - 1).unwrap()); // even → treated as EOF boundary
+    assert!(!chars.is_boundary(u64::MAX).unwrap()); // odd → never a boundary
+}
+
+// 35. nearest_sync_point clamps an extreme offset to the branch length for a
+//     single-byte encoding (EOF position), instead of returning a phantom one.
+#[test]
+fn single_byte_nearest_sync_point_clamps_extreme_offset() {
+    let chars = chars_with_encoding(b"caf\xE9".to_vec(), WINDOWS_1252); // 4 bytes
+    assert_eq!(chars.nearest_sync_point(u64::MAX).unwrap(), 4);
+}
+
+// 36. Boundary queries on an *empty* branch never panic and never error across
+//     every encoding family.
+#[test]
+fn boundary_queries_on_empty_branch_are_panic_free() {
+    for enc in [
+        UTF_8,
+        UTF_16LE,
+        UTF_16BE,
+        WINDOWS_1252,
+        encoding_rs::SHIFT_JIS,
+    ] {
+        let chars = chars_with_encoding(Vec::new(), enc);
+        assert_eq!(
+            chars.nearest_sync_point(0).unwrap(),
+            0,
+            "enc={}",
+            enc.name()
+        );
+        assert!(chars.is_boundary(0).unwrap(), "enc={}", enc.name());
+        assert!(chars.chars_from(0).next().is_none(), "enc={}", enc.name());
+    }
+}
+
+// 37. Navigating arbitrary invalid-UTF-8 "mojibake" by sync point / boundary /
+//     iteration must never panic, and a sync point never exceeds the (clamped)
+//     query offset.
+#[test]
+fn mojibake_utf8_navigation_never_panics() {
+    // Lone continuation bytes, truncated leads, stray 0xFF — all invalid.
+    let garbage = vec![0x41, 0x80, 0xFF, 0xC3, 0x28, 0xE2, 0x82, 0x41, 0xF0, 0x9F];
+    let len = garbage.len() as u64;
+    let chars = chars_with_encoding(garbage, UTF_8);
+    for off in 0..=len + 4 {
+        let sp = chars.nearest_sync_point(off).expect("nearest_sync_point");
+        assert!(sp <= off.min(len), "sync point {sp} exceeded offset {off}");
+        let _ = chars.is_boundary(off).expect("is_boundary");
+        // Decoding from a sync point must terminate without panic.
+        let _: String = chars.chars_from(sp).collect();
+    }
+}
