@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use encoding_rs::{UTF_16BE, UTF_16LE, UTF_8, WINDOWS_1252};
-use redwing::{make_thicket_from_bytes, Branch};
+use encoding_rs::{UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252};
+use redwing::{Branch, make_thicket_from_bytes};
 
 use crate::{
     chars::Chars,

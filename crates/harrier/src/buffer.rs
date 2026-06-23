@@ -21,7 +21,7 @@
 
 use std::{
     ops::Range,
-    sync::{mpsc, Arc},
+    sync::{Arc, mpsc},
 };
 
 use encoding_rs::Encoding;
@@ -536,7 +536,8 @@ impl Buffer {
         let at_byte = self.line_offset(at)?;
         let term = self.terminator_bytes();
         let fork = self.branch.fork();
-        fork.insert_before(at_byte, &term).map_err(BufferError::Io)?;
+        fork.insert_before(at_byte, &term)
+            .map_err(BufferError::Io)?;
         self.replace_branch(fork);
         Ok(())
     }

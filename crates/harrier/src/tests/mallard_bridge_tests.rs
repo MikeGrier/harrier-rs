@@ -21,7 +21,7 @@ use redwing::make_thicket_from_bytes;
 use crate::{
     encoding::{BomPolicy, SourceConfig},
     lines::Lines,
-    mallard_bridge::{from_harrier, HarrierEncodingValidator, HarrierLineSource},
+    mallard_bridge::{HarrierEncodingValidator, HarrierLineSource, from_harrier},
     source::Source,
 };
 

@@ -1,0 +1,8 @@
+# Pin the toolchain so builds, lints, and formatting are reproducible across
+# machines and CI. Without this, `cargo clippy`/`cargo fmt` use whatever
+# toolchain happens to be installed, and a newer release can introduce new
+# deny-by-default lints or formatting changes unexpectedly.
+[toolchain]
+channel = "1.95.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

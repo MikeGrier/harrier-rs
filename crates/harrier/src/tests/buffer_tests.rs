@@ -3,7 +3,7 @@
 //! MA-59: Unit tests for `Buffer` — `line_offset`, `offset_to_line_col`,
 //! `line_content`, `view_range`, ceiling enforcement, and event delivery.
 
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 
 use redwing::{branch::Branch, make_thicket_from_bytes};
 
@@ -430,7 +430,12 @@ fn utf16le_source_rejected_at_buffer_construction() {
     let src = Source::new(branch(content), config).expect("Source::new");
     let result = src.as_buffer();
     assert!(
-        matches!(result, Err(BufferError::EncodeUnsupported { encoding_name: "UTF-16LE" })),
+        matches!(
+            result,
+            Err(BufferError::EncodeUnsupported {
+                encoding_name: "UTF-16LE"
+            })
+        ),
         "expected EncodeUnsupported for UTF-16LE, got: {:?}",
         result.err()
     );
@@ -452,7 +457,12 @@ fn utf16be_source_rejected_at_buffer_construction() {
     let src = Source::new(branch(content), config).expect("Source::new");
     let result = src.as_buffer();
     assert!(
-        matches!(result, Err(BufferError::EncodeUnsupported { encoding_name: "UTF-16BE" })),
+        matches!(
+            result,
+            Err(BufferError::EncodeUnsupported {
+                encoding_name: "UTF-16BE"
+            })
+        ),
         "expected EncodeUnsupported for UTF-16BE, got: {:?}",
         result.err()
     );

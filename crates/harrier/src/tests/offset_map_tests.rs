@@ -6,9 +6,9 @@
 
 use std::sync::Arc;
 
-use redwing::{make_thicket_from_bytes, Branch};
+use redwing::{Branch, make_thicket_from_bytes};
 
-use crate::offset_map::{build_offset_map, OffsetMap};
+use crate::offset_map::{OffsetMap, build_offset_map};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -113,7 +113,7 @@ fn all_crlf_drift_equals_crlf_count() {
     assert_eq!(map.to_source(0), 0); // first \r
     assert_eq!(map.to_source(1), 2); // second \r
     assert_eq!(map.to_source(2), 4); // third \r
-                                     // "end" position: normalised length is 3, source length is 6
+    // "end" position: normalised length is 3, source length is 6
     assert_eq!(map.to_source(3), 6);
 }
 

@@ -2,7 +2,7 @@
 
 //! MA-49: Unit tests for `LineMap`, `LineCount`, and `LineMapSegment`.
 
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 
 use redwing::{branch::Branch, make_thicket_from_bytes};
 
@@ -361,11 +361,12 @@ fn dense_crlf_terminators_all_crlf() {
     let data: Vec<u8> = b"x\r\n".repeat(10);
     let mut map = map_no_sender(data, 64);
     scan_all(&mut map);
-    assert!(map
-        .segment(0)
-        .terminators
-        .iter()
-        .all(|&t| t == LineEnding::CrLf));
+    assert!(
+        map.segment(0)
+            .terminators
+            .iter()
+            .all(|&t| t == LineEnding::CrLf)
+    );
 }
 
 // ── Invalidation ─────────────────────────────────────────────────────────────
@@ -517,7 +518,7 @@ fn crlf_at_segment_boundary() {
     let mut map = map_no_sender(data.to_vec(), 4);
     scan_all(&mut map);
     assert_eq!(map.segment_count(), 3); // bytes: 0..4, 4..8, 8..9
-                                        // Seg 0: CrLf (cross-boundary), no partial
+    // Seg 0: CrLf (cross-boundary), no partial
     assert_eq!(map.segment(0).terminators, vec![LineEnding::CrLf]);
     assert!(!map.segment(0).trailing_partial);
     // Seg 1: "def\n" minus the leading \n (skipped) = "def\n" → Lf

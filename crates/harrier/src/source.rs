@@ -9,8 +9,8 @@ use encoding_rs::Encoding;
 use redwing::Branch;
 
 use crate::encoding::{
-    detect_bom, detect_line_ending, BomPolicy, ChardetngDetector, EncodingDetector, LineEnding,
-    SourceConfig,
+    BomPolicy, ChardetngDetector, EncodingDetector, LineEnding, SourceConfig, detect_bom,
+    detect_line_ending,
 };
 
 // ── MA-11: SourceError ────────────────────────────────────────────────────────
@@ -76,8 +76,10 @@ impl From<std::io::Error> for SourceError {
 ///
 /// 1. Reads a configurable probe prefix of the branch.
 /// 2. Detects a BOM (if present and `bom_policy` is `Honour`).
-/// 3. Runs `chardetng` heuristic detection when no BOM is present and no
-///    encoding hint was supplied.
+/// 3. Classifies well-formed UTF-8 as `UTF-8` by *validation* (see
+///    [`SourceConfig::prefer_utf8_when_valid`]) and otherwise runs
+///    `chardetng` heuristic detection, when no BOM is present and no encoding
+///    hint was supplied.
 /// 4. Validates that the selected encoding supports both decode and encode
 ///    (i.e. is not a decode-only WHATWG encoding).
 /// 5. Runs a majority-vote line-ending detector over the probe bytes.
@@ -127,11 +129,11 @@ impl Source {
             if let Some(enc) = bom.encoding {
                 (enc, bom.bom_len)
             } else {
-                (resolve_encoding_no_bom(&probe, &config)?, 0)
+                (resolve_encoding_no_bom(&branch, &probe, &config)?, 0)
             }
         } else {
             // BomPolicy::Ignore — treat BOM bytes as content, skip BOM sniff.
-            (resolve_encoding_no_bom(&probe, &config)?, 0)
+            (resolve_encoding_no_bom(&branch, &probe, &config)?, 0)
         };
 
         // ── Step 2: Encode/decode symmetry check ──────────────────────────
@@ -284,8 +286,17 @@ impl Source {
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /// Resolve the encoding when no BOM was found (or BOM was ignored).
-/// Uses the caller's hint if provided, otherwise runs `chardetng`.
+///
+/// Uses the caller's hint if provided. Otherwise, when
+/// [`SourceConfig::prefer_utf8_when_valid`] is set, a probe that is
+/// well-formed UTF-8 (and free of interleaved NUL bytes, which would indicate
+/// BOM-less UTF-16) is classified as `UTF-8` directly. UTF-8 is decided by
+/// *validation*, not by the heuristic — this is deliberate and must not be
+/// "simplified" away, because `chardetng` can otherwise mis-guess a legacy
+/// single-byte code page for valid UTF-8 input. Everything else falls back to
+/// the `chardetng` heuristic detector.
 fn resolve_encoding_no_bom(
+    branch: &Arc<dyn Branch>,
     probe: &[u8],
     config: &SourceConfig,
 ) -> Result<&'static Encoding, SourceError> {
@@ -293,7 +304,37 @@ fn resolve_encoding_no_bom(
         return Ok(hint);
     }
 
-    // No hint — run the heuristic detector.
+    // ── UTF-8 well-formedness gate ──────────────────────────────────────
+    //
+    // A byte stream that is valid UTF-8 is self-describing and MUST be
+    // classified UTF-8 — never a legacy single-byte code page. chardetng is
+    // a heuristic for non-self-validating encodings; on UTF-8 input dense
+    // with multi-byte sequences (box-drawing, em-dashes, arrows, smart
+    // quotes) it can mis-guess windows-1252, which then decodes every valid
+    // 3-byte sequence as three bogus chars and invites a destructive, lossy
+    // re-encode downstream. Gating on actual UTF-8 validity removes that
+    // entire failure class and makes detection deterministic and
+    // probe-size-stable.
+    //
+    // The NUL-byte exclusion preserves heuristic detection of BOM-less
+    // UTF-16: such streams contain interleaved 0x00 bytes that *are* valid
+    // UTF-8 (U+0000) and would otherwise be mislabelled UTF-8 here. Real
+    // UTF-8 *text* essentially never contains U+0000, so excluding it from
+    // the fast path costs nothing and keeps UTF-16 handling intact.
+    if config.prefer_utf8_when_valid && !probe.contains(&0) && probe_is_well_formed_utf8(probe) {
+        // The probe is well-formed UTF-8. When the caller opted into
+        // full-stream validation, confirm the *entire* branch is well-formed
+        // UTF-8 before committing — this is the only path that reads beyond
+        // the probe window. Otherwise the probe alone is sufficient.
+        if !config.validate_full_stream_utf8 || branch_is_well_formed_utf8(branch)? {
+            return Ok(encoding_rs::UTF_8);
+        }
+        // Full-stream validation found a non-UTF-8 byte past the probe
+        // window; fall through to the heuristic detector below.
+    }
+
+    // Not valid UTF-8 (or opted out) — fall back to the heuristic detector
+    // for legacy single-byte / DBCS encodings.
     let mut detector = ChardetngDetector::new();
     detector.feed(probe, true);
     let allow_utf8 = true; // Always allow UTF-8 from heuristic detection.
@@ -304,6 +345,99 @@ fn resolve_encoding_no_bom(
         return Err(SourceError::DetectionFailure);
     }
     Ok(enc)
+}
+
+/// Returns `true` when `probe` is well-formed UTF-8, *tolerating* a single
+/// incomplete multi-byte sequence at the very end of the slice.
+///
+/// The probe is a fixed-size prefix of the source, so the window can fall in
+/// the middle of a multi-byte code point. `std::str::from_utf8` distinguishes
+/// the two failure cases:
+///
+/// - `Utf8Error::error_len() == Some(_)` → genuinely invalid bytes mid-stream
+///   (this stream is not UTF-8).
+/// - `Utf8Error::error_len() == None`    → "unexpected end of input": the
+///   probe merely cut a code point in half; everything up to `valid_up_to()`
+///   is well-formed UTF-8.
+pub(crate) fn probe_is_well_formed_utf8(probe: &[u8]) -> bool {
+    match std::str::from_utf8(probe) {
+        Ok(_) => true,
+        Err(e) => e.error_len().is_none(),
+    }
+}
+
+/// Returns `true` when the *entire* branch is well-formed UTF-8 and contains
+/// no NUL bytes.
+///
+/// Unlike [`probe_is_well_formed_utf8`], this reads every byte of the branch —
+/// it is O(branch length) in time but uses only O(1) memory: the stream is
+/// scanned in fixed 128 KiB chunks rather than buffered all at once, so a
+/// multi-gigabyte branch is validated with a single small buffer. It is only
+/// invoked when the caller sets [`SourceConfig::validate_full_stream_utf8`].
+///
+/// A UTF-8 sequence that straddles a chunk boundary is carried over to the
+/// front of the next chunk (`std::str::from_utf8` reports such a split via
+/// `Utf8Error::error_len() == None`), so boundary placement never produces a
+/// false negative. Because the whole stream is examined, any genuine decode
+/// error — including a multi-byte sequence cut off at true end-of-file — means
+/// the stream is not well-formed UTF-8. NUL bytes are rejected so that
+/// BOM-less UTF-16 (NUL-interleaved) is not swallowed by the UTF-8 fast path.
+pub(crate) fn branch_is_well_formed_utf8(branch: &Arc<dyn Branch>) -> Result<bool, SourceError> {
+    /// Streaming validation chunk size (128 KiB).
+    const CHUNK_LEN: usize = 128 * 1024;
+    /// A UTF-8 sequence is at most four bytes, so at most three trailing bytes
+    /// can be carried across a chunk boundary.
+    const MAX_CARRY: usize = 3;
+
+    let len = branch.byte_len();
+    if len == 0 {
+        return Ok(true);
+    }
+
+    // Buffer layout: `[carry bytes][freshly read bytes]`. `carry` counts the
+    // leftover bytes of a sequence split across the previous boundary; they sit
+    // at the front of `buf` and are validated together with the next read. The
+    // buffer is sized to the smaller of the branch length and one chunk so that
+    // validating a small stream does not allocate a full chunk.
+    let cap = MAX_CARRY + (len as usize).min(CHUNK_LEN);
+    let mut buf = vec![0u8; cap];
+    let mut carry = 0usize;
+    let mut offset: u64 = 0;
+
+    while offset < len {
+        let want = ((len - offset) as usize).min(CHUNK_LEN);
+        let n = branch.read_at(offset, &mut buf[carry..carry + want])?;
+        if n == 0 {
+            // Defensive: a compliant branch fills the request before EOF.
+            break;
+        }
+        offset += n as u64;
+
+        let filled = carry + n;
+        let data = &buf[..filled];
+        if data.contains(&0) {
+            return Ok(false);
+        }
+
+        match std::str::from_utf8(data) {
+            Ok(_) => carry = 0,
+            Err(e) => {
+                if e.error_len().is_some() {
+                    // Genuinely invalid bytes mid-stream.
+                    return Ok(false);
+                }
+                // Incomplete trailing sequence: move its bytes to the front of
+                // the buffer so the next read can complete them.
+                let valid = e.valid_up_to();
+                carry = filled - valid;
+                buf.copy_within(valid..filled, 0);
+            }
+        }
+    }
+
+    // Any bytes still carried at end-of-stream are a truncated sequence with no
+    // completing bytes — that is malformed UTF-8.
+    Ok(carry == 0)
 }
 
 /// Verify that `encoding` is not a WHATWG decode-only encoding.

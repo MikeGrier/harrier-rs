@@ -561,14 +561,24 @@ automatically at open time.  The detection pipeline is:
    over all other detection heuristics.  `harrier` records the BOM's byte length so it can be
    skipped or forwarded as the caller requests (see *BOM pass-through* below).
 
-3. **Heuristic detection.** If no BOM is found (or BOM detection is disabled), the probe buffer
-   is passed to an `EncodingDetector` implementation.  The built-in default wraps
-   [`chardetng`](https://crates.io/crates/chardetng) and calls
+3. **UTF-8 well-formedness gate.** If no BOM is found, the probe buffer is tested for UTF-8
+   validity *before* the heuristic runs (controlled by `prefer_utf8_when_valid`, default on).
+   UTF-8 is self-describing, so a probe that validates as UTF-8 — tolerating a multi-byte
+   sequence truncated by the probe boundary, and excluding NUL-bearing streams so BOM-less
+   UTF-16 still reaches the heuristic — is classified `UTF-8` directly. This makes detection
+   deterministic and probe-size-stable, and prevents `chardetng` from mis-guessing
+   `windows-1252` for valid UTF-8 dense with multi-byte sequences (box-drawing, em-dashes,
+   arrows, smart quotes). Set `validate_full_stream_utf8` (default off) to validate the entire
+   stream rather than just the probe, at the cost of a full read.
+
+4. **Heuristic detection.** If no BOM is found (or BOM detection is disabled) and the UTF-8 gate
+   did not apply, the probe buffer is passed to an `EncodingDetector` implementation.  The
+   built-in default wraps [`chardetng`](https://crates.io/crates/chardetng) and calls
    `EncodingDetector::guess(tld: None, allow_utf8: true)`.  The `allow_utf8: true` flag
    instructs `chardetng` to return UTF-8 for content that is consistent with UTF-8, rather than
    falling back to a legacy single-byte encoding.
 
-4. **Result.** Either path yields a `&'static encoding_rs::Encoding`, which becomes the encoding
+5. **Result.** Each path yields a `&'static encoding_rs::Encoding`, which becomes the encoding
    used for all subsequent decode and re-encode operations on this source.
 
 #### The `EncodingDetector` Trait

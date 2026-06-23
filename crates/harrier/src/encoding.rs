@@ -289,7 +289,20 @@ pub enum BomPolicy {
 /// Configuration for opening a source document via `Source::new`.
 ///
 /// All fields have sensible defaults via [`SourceConfig::default`].
+///
+/// This struct is `#[non_exhaustive]`, so downstream crates cannot build it
+/// with struct-literal syntax. Start from [`SourceConfig::default`] and assign
+/// the fields you need:
+///
+/// ```
+/// # use harrier::encoding::SourceConfig;
+/// let mut config = SourceConfig::default();
+/// config.probe_len = 4096;
+/// ```
+///
+/// This keeps future field additions non-breaking.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SourceConfig {
     /// An optional caller-supplied encoding hint.
     ///
@@ -322,6 +335,29 @@ pub struct SourceConfig {
     /// Must be at least 3 (the length of a UTF-8 BOM); values below 3 are
     /// clamped to 3 at runtime.
     pub probe_len: usize,
+
+    /// When `true` (default), a probe that is well-formed UTF-8 is classified
+    /// as `UTF_8` *before* the heuristic detector runs. This makes detection
+    /// deterministic and prevents `chardetng` from mis-guessing a legacy
+    /// single-byte code page for valid UTF-8 input that is dense with
+    /// multi-byte sequences (box-drawing, em-dashes, arrows, smart quotes).
+    ///
+    /// Set to `false` only to restore pure-heuristic behaviour (e.g. for
+    /// differential testing against `chardetng`).
+    pub prefer_utf8_when_valid: bool,
+
+    /// When `true`, the UTF-8 fast path enabled by `prefer_utf8_when_valid`
+    /// validates the *entire* branch rather than just the probe prefix before
+    /// classifying the source as `UTF_8`. This guarantees no invalid byte
+    /// hides past the probe window, at the cost of one full read of the
+    /// source (O(branch length)).
+    ///
+    /// `false` by default: opening a source normally reads only the probe
+    /// prefix, and this flag is the *only* thing that makes `Source::new`
+    /// read the whole stream. Enable it only when that cost is acceptable and
+    /// full-stream certainty is required. Has no effect when
+    /// `prefer_utf8_when_valid` is `false`.
+    pub validate_full_stream_utf8: bool,
 }
 
 impl Default for SourceConfig {
@@ -332,6 +368,8 @@ impl Default for SourceConfig {
             decode_error_policy: DecodeErrorPolicy::Substitute,
             line_ending_default: None,
             probe_len: DEFAULT_PROBE_LEN,
+            prefer_utf8_when_valid: true,
+            validate_full_stream_utf8: false,
         }
     }
 }

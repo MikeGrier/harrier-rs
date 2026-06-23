@@ -8,7 +8,7 @@
 //! the overall [`LineCount`]; once a segment is scanned its contribution
 //! becomes exact.
 
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 
 use redwing::branch::Branch;
 
@@ -176,9 +176,7 @@ impl LineMap {
             if byte_range.end < branch_len {
                 // Peek at the first byte of the next segment.
                 let mut peek = [0u8; 1];
-                if self.branch.read_at(byte_range.end, &mut peek)? == 1
-                    && peek[0] == b'\n'
-                {
+                if self.branch.read_at(byte_range.end, &mut peek)? == 1 && peek[0] == b'\n' {
                     // Cross-boundary CRLF: attribute to this segment.
                     terminators.push(LineEnding::CrLf);
                     next_skip = true;
@@ -348,9 +346,7 @@ impl LineMap {
 
         while pos < scan_end {
             let to_read = ((scan_end - pos) as usize).min(SCAN_BUF);
-            let n = self
-                .branch
-                .read_at(pos, &mut buf[..to_read])?;
+            let n = self.branch.read_at(pos, &mut buf[..to_read])?;
             if n == 0 {
                 break;
             }
@@ -480,9 +476,7 @@ impl LineMap {
 
         while pos < scan_end {
             let to_read = ((scan_end - pos) as usize).min(SCAN_BUF);
-            let n = self
-                .branch
-                .read_at(pos, &mut buf[..to_read])?;
+            let n = self.branch.read_at(pos, &mut buf[..to_read])?;
             if n == 0 {
                 break;
             }

@@ -2,11 +2,11 @@
 
 //! Unit tests for `crate::encoding` (MA-8, MA-9).
 
-use encoding_rs::{UTF_16BE, UTF_16LE, UTF_8};
+use encoding_rs::{UTF_8, UTF_16BE, UTF_16LE};
 
 use crate::encoding::{
-    detect_bom, detect_line_ending, BomPolicy, DecodeErrorPolicy, LineEnding, SourceConfig,
-    DEFAULT_PROBE_LEN,
+    BomPolicy, DEFAULT_PROBE_LEN, DecodeErrorPolicy, LineEnding, SourceConfig, detect_bom,
+    detect_line_ending,
 };
 
 // MA-9 uses the trait object separately so the import is scoped here.
@@ -236,12 +236,16 @@ fn source_config_default_values() {
     assert_eq!(cfg.decode_error_policy, DecodeErrorPolicy::Substitute);
     assert_eq!(cfg.line_ending_default, None);
     assert_eq!(cfg.probe_len, DEFAULT_PROBE_LEN);
+    assert!(cfg.prefer_utf8_when_valid);
+    assert!(!cfg.validate_full_stream_utf8);
 }
 
 #[test]
 fn source_config_custom_values_round_trip() {
     let cfg = SourceConfig {
         encoding_hint: Some(UTF_8),
+        prefer_utf8_when_valid: false,
+        validate_full_stream_utf8: true,
         bom_policy: BomPolicy::Ignore,
         decode_error_policy: DecodeErrorPolicy::Fatal,
         line_ending_default: Some(LineEnding::CrLf),
@@ -252,4 +256,6 @@ fn source_config_custom_values_round_trip() {
     assert_eq!(cfg.decode_error_policy, DecodeErrorPolicy::Fatal);
     assert_eq!(cfg.line_ending_default, Some(LineEnding::CrLf));
     assert_eq!(cfg.probe_len, 512);
+    assert!(!cfg.prefer_utf8_when_valid);
+    assert!(cfg.validate_full_stream_utf8);
 }

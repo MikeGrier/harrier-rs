@@ -6,10 +6,10 @@
 
 use std::sync::Arc;
 
-use redwing::{make_thicket_from_bytes, materialize, Branch};
+use redwing::{Branch, make_thicket_from_bytes, materialize};
 
 use crate::{
-    offset_map::{build_offset_map, OffsetMap},
+    offset_map::{OffsetMap, build_offset_map},
     view::View,
 };
 
@@ -319,13 +319,18 @@ fn apply_replacement_containing_crlf_stored_verbatim() {
 
 /// Inverted range (end < start) must return InvalidInput, not panic.
 #[test]
+#[allow(clippy::reversed_empty_ranges)] // the reversed range is the point of this test
 fn apply_inverted_range_returns_error() {
     let view = view_of(b"hello\n");
     // start (4) > end (2)
     let result = view.apply(4..2, b"x");
     assert!(result.is_err());
     let err = result.err().expect("expected Err");
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "expected InvalidInput, got {err}");
+    assert_eq!(
+        err.kind(),
+        std::io::ErrorKind::InvalidInput,
+        "expected InvalidInput, got {err}"
+    );
 }
 
 /// End offset past the view length must return InvalidInput.
@@ -336,7 +341,11 @@ fn apply_end_past_view_length_returns_error() {
     let result = view.apply(0..7, b"x");
     assert!(result.is_err());
     let err = result.err().expect("expected Err");
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "expected InvalidInput, got {err}");
+    assert_eq!(
+        err.kind(),
+        std::io::ErrorKind::InvalidInput,
+        "expected InvalidInput, got {err}"
+    );
 }
 
 /// Start offset equal to end offset (empty range) with end == view length is valid.
