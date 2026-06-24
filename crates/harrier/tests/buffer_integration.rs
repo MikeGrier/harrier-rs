@@ -23,7 +23,7 @@ use harrier::{
     encoding::{BomPolicy, SourceConfig},
     source::Source,
 };
-use redwing::{make_thicket_from_bytes, materialize, Branch};
+use redwing::{Branch, make_thicket_from_bytes, materialize};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -33,17 +33,13 @@ fn branch_of(bytes: impl Into<Vec<u8>>) -> Arc<dyn Branch> {
 
 fn make_buffer(bytes: impl Into<Vec<u8>>) -> Buffer {
     let b = branch_of(bytes);
-    Source::new(
-        b,
-        SourceConfig {
-            encoding_hint: Some(UTF_8),
-            bom_policy: BomPolicy::Ignore,
-            ..SourceConfig::default()
-        },
-    )
-    .expect("Source::new")
-    .as_buffer()
-    .expect("as_buffer")
+    let mut config = SourceConfig::default();
+    config.encoding_hint = Some(UTF_8);
+    config.bom_policy = BomPolicy::Ignore;
+    Source::new(b, config)
+        .expect("Source::new")
+        .as_buffer()
+        .expect("as_buffer")
 }
 
 // ── LF baseline test data ─────────────────────────────────────────────────────

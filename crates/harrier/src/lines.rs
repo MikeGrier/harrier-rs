@@ -192,7 +192,15 @@ impl Lines {
     ///   [`self.view_ceiling`](DEFAULT_VIEW_CEILING).
     /// - [`LinesError::Io`] on any branch read error.
     pub fn view_range(&self, byte_range: Range<u64>) -> Result<View, LinesError> {
-        let len = byte_range.end.saturating_sub(byte_range.start);
+        // Clamp the requested range to the branch first: a caller that
+        // navigates off the end (or passes an inverted range) must never drive
+        // an out-of-bounds read, fabricate phantom trailing NUL bytes, or trip
+        // the ceiling check on a length larger than the file.
+        let branch_len = self.branch.byte_len();
+        let start = byte_range.start.min(branch_len);
+        let end = byte_range.end.clamp(start, branch_len);
+        let byte_range = start..end;
+        let len = end - start;
         if len > self.view_ceiling {
             return Err(LinesError::RangeExceedsCeiling {
                 requested: len,
@@ -200,8 +208,20 @@ impl Lines {
             });
         }
 
+        // Guard the u64 → usize cast used for the allocations below. On 64-bit
+        // targets this is a no-op (usize == u64); on 32-bit targets it rejects
+        // a range too large to address in memory instead of silently
+        // truncating the buffer size. The reported ceiling is capped at the
+        // platform addressable limit so the `requested > ceiling` invariant
+        // implied by `RangeExceedsCeiling` stays true even when `view_ceiling`
+        // itself is configured above `usize::MAX`.
+        let len_usize = usize::try_from(len).map_err(|_| LinesError::RangeExceedsCeiling {
+            requested: len,
+            ceiling: self.view_ceiling.min(usize::MAX as u64),
+        })?;
+
         // Read the raw source bytes.
-        let mut raw = vec![0u8; len as usize];
+        let mut raw = vec![0u8; len_usize];
         if len > 0 {
             self.branch.read_at(byte_range.start, &mut raw)?;
         }
@@ -210,7 +230,7 @@ impl Lines {
         let map = build_offset_map(self.branch.as_ref(), byte_range.clone())?;
 
         // Produce the normalised bytes: CRLF → LF, lone CR → LF.
-        let mut normalised = Vec::with_capacity(len as usize);
+        let mut normalised = Vec::with_capacity(len_usize);
         let mut i = 0;
         while i < raw.len() {
             match raw[i] {

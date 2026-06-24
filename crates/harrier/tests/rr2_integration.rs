@@ -37,7 +37,7 @@ use harrier::{
     encoding::{BomPolicy, LineEnding, SourceConfig},
     source::Source,
 };
-use redwing::{make_thicket_from_bytes, materialize, Branch};
+use redwing::{Branch, make_thicket_from_bytes, materialize};
 use regex::bytes::Regex;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -66,14 +66,10 @@ fn rr2_run_cfg(
     let b1: Arc<dyn Branch> = make_thicket_from_bytes(content.to_vec()).main();
     let file_len = b1.byte_len();
 
-    let source = Source::new(
-        Arc::clone(&b1),
-        SourceConfig {
-            encoding_hint,
-            bom_policy: BomPolicy::Honour,
-            ..SourceConfig::default()
-        },
-    )?;
+    let mut config = SourceConfig::default();
+    config.encoding_hint = encoding_hint;
+    config.bom_policy = BomPolicy::Honour;
+    let source = Source::new(Arc::clone(&b1), config)?;
     let line_ending = source.line_ending();
 
     let lines = source.as_lines()?;

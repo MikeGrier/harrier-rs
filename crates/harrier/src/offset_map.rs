@@ -142,11 +142,7 @@ impl OffsetMap {
         // false, i.e. the first entry with normalised_pos > normalised.
         // The entry immediately before that index is the applicable one.
         let idx = self.entries.partition_point(|&(p, _)| p <= normalised);
-        if idx == 0 {
-            0
-        } else {
-            self.entries[idx - 1].1
-        }
+        if idx == 0 { 0 } else { self.entries[idx - 1].1 }
     }
 }
 

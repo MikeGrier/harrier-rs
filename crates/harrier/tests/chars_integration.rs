@@ -12,12 +12,12 @@
 
 use std::sync::Arc;
 
-use encoding_rs::{UTF_16LE, UTF_8};
+use encoding_rs::{UTF_8, UTF_16LE};
 use harrier::{
     encoding::{BomPolicy, SourceConfig},
     source::Source,
 };
-use redwing::{make_thicket_from_bytes, Branch};
+use redwing::{Branch, make_thicket_from_bytes};
 
 // ── Helper ────────────────────────────────────────────────────────────────────
 
@@ -26,11 +26,9 @@ fn branch(bytes: impl Into<Vec<u8>>) -> Arc<dyn Branch> {
 }
 
 fn make_source(bytes: Vec<u8>, enc: &'static encoding_rs::Encoding) -> harrier::source::Source {
-    let config = SourceConfig {
-        encoding_hint: Some(enc),
-        bom_policy: BomPolicy::Ignore,
-        ..SourceConfig::default()
-    };
+    let mut config = SourceConfig::default();
+    config.encoding_hint = Some(enc);
+    config.bom_policy = BomPolicy::Ignore;
     Source::new(branch(bytes), config).expect("Source::new")
 }
 

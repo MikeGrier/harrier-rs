@@ -2,8 +2,9 @@
 
 [package]
 name = "harrier"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
+rust-version = "1.95"
 description = "A line-map and character-encoding-aware red-green tree for structured, lossless, incrementally-editable text"
 license = "MIT"
 repository = "https://github.com/MikeGrier/harrier-rs"

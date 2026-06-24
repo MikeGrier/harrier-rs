@@ -3,7 +3,7 @@
 //! MA-59: Unit tests for `Buffer` — `line_offset`, `offset_to_line_col`,
 //! `line_content`, `view_range`, ceiling enforcement, and event delivery.
 
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 
 use redwing::{branch::Branch, make_thicket_from_bytes};
 
@@ -430,7 +430,12 @@ fn utf16le_source_rejected_at_buffer_construction() {
     let src = Source::new(branch(content), config).expect("Source::new");
     let result = src.as_buffer();
     assert!(
-        matches!(result, Err(BufferError::EncodeUnsupported { encoding_name: "UTF-16LE" })),
+        matches!(
+            result,
+            Err(BufferError::EncodeUnsupported {
+                encoding_name: "UTF-16LE"
+            })
+        ),
         "expected EncodeUnsupported for UTF-16LE, got: {:?}",
         result.err()
     );
@@ -452,7 +457,12 @@ fn utf16be_source_rejected_at_buffer_construction() {
     let src = Source::new(branch(content), config).expect("Source::new");
     let result = src.as_buffer();
     assert!(
-        matches!(result, Err(BufferError::EncodeUnsupported { encoding_name: "UTF-16BE" })),
+        matches!(
+            result,
+            Err(BufferError::EncodeUnsupported {
+                encoding_name: "UTF-16BE"
+            })
+        ),
         "expected EncodeUnsupported for UTF-16BE, got: {:?}",
         result.err()
     );
@@ -510,4 +520,94 @@ fn view_range_shift_jis_bare_cr_normalised() {
     let buf = make_shift_jis_buffer(content);
     let view = buf.view_range(0..3).unwrap();
     assert_eq!(view.bytes, b"X\nY");
+}
+
+// ── off-the-end / off-the-beginning navigation ────────────────────────────────
+
+/// Helper: deterministic single-byte (windows-1252) buffer so that arbitrary
+/// bytes — including invalid-UTF-8 "mojibake" — never trip UTF-16 rejection and
+/// always decode 1:1.
+fn make_win1252_buffer(bytes: impl Into<Vec<u8>>) -> Buffer {
+    let config = crate::encoding::SourceConfig {
+        encoding_hint: Some(encoding_rs::WINDOWS_1252),
+        ..crate::encoding::SourceConfig::default()
+    };
+    Source::new(branch(bytes), config)
+        .expect("Source::new")
+        .as_buffer()
+        .expect("as_buffer")
+}
+
+// 39. view_range whose end runs past EOF is clamped to the branch — it returns
+//     exactly the real bytes with no fabricated trailing NULs.
+#[test]
+fn view_range_past_eof_clamps_to_branch() {
+    let buf = make_buffer(b"hello\nworld\n".to_vec());
+    let view = buf.view_range(0..9_999).unwrap();
+    assert_eq!(view.bytes, b"hello\nworld\n");
+}
+
+// 40. view_range starting past EOF yields an empty view (never an OOB read).
+#[test]
+fn view_range_start_past_eof_is_empty() {
+    let buf = make_buffer(b"hello\n".to_vec());
+    let view = buf.view_range(100..200).unwrap();
+    assert!(view.bytes.is_empty());
+}
+
+// 41. An inverted (end < start) range is treated as empty, not as an underflow.
+#[test]
+fn view_range_inverted_is_empty() {
+    let buf = make_buffer(b"hello world\n".to_vec());
+    // Build the range from values so the (intentional) inversion is a runtime
+    // condition, not a statically-reversed literal.
+    let (start, end) = (8u64, 2u64);
+    let view = buf.view_range(start..end).unwrap();
+    assert!(view.bytes.is_empty());
+}
+
+// 42. A range that spills past EOF still honours the ceiling on *real* bytes:
+//     a tiny file requested as 0..huge must not be rejected for phantom length.
+#[test]
+fn view_range_past_eof_does_not_trip_ceiling() {
+    let buf = make_buffer(b"abc\n".to_vec()).with_view_ceiling(8);
+    let view = buf.view_range(0..u64::MAX).unwrap();
+    assert_eq!(view.bytes, b"abc\n");
+}
+
+// 43. line_offset / offset_to_line_col with extreme offsets return clean
+//     LineOutOfRange errors — never a panic.
+#[test]
+fn navigation_past_eof_returns_errors_not_panics() {
+    let mut buf = make_buffer(b"hi\n".to_vec());
+    assert!(matches!(
+        buf.line_offset(usize::MAX),
+        Err(BufferError::LineOutOfRange { .. })
+    ));
+    assert!(matches!(
+        buf.offset_to_line_col(u64::MAX),
+        Err(BufferError::LineOutOfRange { .. })
+    ));
+    assert!(matches!(
+        buf.line_content(usize::MAX).map(|_| ()),
+        Err(BufferError::LineOutOfRange { .. })
+    ));
+}
+
+// 44. Navigation over invalid-UTF-8 "mojibake" is consistent and panic-free:
+//     the line map scans raw bytes, so offsets are independent of decodability.
+#[test]
+fn navigation_on_mojibake_is_consistent_and_panic_free() {
+    // bytes: a FF FE \n b 80 \n c C3  → 3 lines.
+    let mut buf = make_win1252_buffer(b"a\xFF\xFE\nb\x80\nc\xC3".to_vec());
+    assert_eq!(buf.line_offset(0).unwrap(), 0);
+    assert_eq!(buf.line_offset(1).unwrap(), 4);
+    assert_eq!(buf.line_offset(2).unwrap(), 7);
+    assert!(matches!(
+        buf.line_offset(3),
+        Err(BufferError::LineOutOfRange { .. })
+    ));
+    assert_eq!(buf.line_content(0).unwrap().bytes, b"a\xFF\xFE\n");
+    assert_eq!(buf.line_content(2).unwrap().bytes, b"c\xC3");
+    assert_eq!(buf.offset_to_line_col(1).unwrap(), (0, 1));
 }

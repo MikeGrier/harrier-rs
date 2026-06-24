@@ -264,10 +264,27 @@ impl Chars {
     ///
     /// Returns [`CharsError::Io`] if reading from the branch fails.
     pub fn nearest_sync_point(&self, offset: u64) -> Result<u64, CharsError> {
+        // Clamp queries that run off the end of the branch to the end-of-stream
+        // position. This keeps every encoding arm from reading past EOF and
+        // guarantees a consistent, panic-free answer for callers that navigate
+        // beyond the last byte.
+        let offset = offset.min(self.branch().byte_len());
         match self.sync_kind {
             SyncKind::SingleByte => Ok(offset),
 
-            SyncKind::Utf8 => nearest_utf8_sync(self.branch().as_ref(), offset),
+            SyncKind::Utf8 => {
+                let len = self.branch().byte_len();
+                if offset == len {
+                    // End-of-stream (and the empty-branch case, offset 0 ==
+                    // len 0) is itself a character boundary — consistent with
+                    // `is_boundary` and with the SingleByte/UTF-16 arms, all of
+                    // which return `len` here. Returning `len` directly also
+                    // avoids an out-of-bounds read that scanning would require.
+                    Ok(len)
+                } else {
+                    nearest_utf8_sync(self.branch().as_ref(), offset)
+                }
+            }
 
             SyncKind::Utf16Le => nearest_utf16le_sync(self.branch().as_ref(), offset),
 
@@ -327,6 +344,12 @@ impl Chars {
             SyncKind::SingleByte => Ok(true),
 
             SyncKind::Utf8 => {
+                // At or past EOF there is no byte to read; the end-of-stream
+                // position is itself a boundary. This also covers the empty
+                // branch (offset 0 == byte_len 0).
+                if offset >= self.branch().byte_len() {
+                    return Ok(true);
+                }
                 let byte = self.branch().read_byte(offset)?;
                 Ok(is_utf8_boundary_byte(byte))
             }
@@ -337,7 +360,8 @@ impl Chars {
                 }
                 // Need room for the full 16-bit word; if the branch is too
                 // short treat the offset as a boundary (end of stream).
-                if offset + 1 >= self.branch().byte_len() {
+                // `saturating_add` guards against `offset == u64::MAX`.
+                if offset.saturating_add(1) >= self.branch().byte_len() {
                     return Ok(true);
                 }
                 let high_byte = self.branch().read_byte(offset + 1)?;

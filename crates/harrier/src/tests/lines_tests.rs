@@ -7,8 +7,8 @@
 
 use std::sync::Arc;
 
-use encoding_rs::{UTF_16BE, UTF_16LE, UTF_8};
-use redwing::{make_thicket_from_bytes, Branch};
+use encoding_rs::{UTF_8, UTF_16BE, UTF_16LE};
+use redwing::{Branch, make_thicket_from_bytes};
 
 use crate::{
     encoded::Encoded,
@@ -439,6 +439,33 @@ fn view_range_within_custom_ceiling() {
     let lines = lines_utf8(b"hello world\n").with_view_ceiling(12);
     let view = lines.view_range(0..12).unwrap();
     assert_eq!(view.bytes, b"hello world\n");
+}
+
+/// 31a. `view_range` whose end runs past EOF is clamped: it returns exactly the
+///      real bytes, never fabricated trailing NULs.
+#[test]
+fn view_range_past_eof_clamps_to_branch() {
+    let lines = lines_utf8(b"hello world\n");
+    let view = lines.view_range(0..9_999).unwrap();
+    assert_eq!(view.bytes, b"hello world\n");
+}
+
+/// 31b. `view_range` starting past EOF yields an empty view (no OOB read).
+#[test]
+fn view_range_start_past_eof_is_empty() {
+    let lines = lines_utf8(b"hello\n");
+    let view = lines.view_range(100..200).unwrap();
+    assert!(view.bytes.is_empty());
+}
+
+/// 31c. An inverted (end < start) range is treated as empty, not an underflow.
+#[test]
+fn view_range_inverted_is_empty() {
+    let lines = lines_utf8(b"hello world\n");
+    // Build the range from values so the inversion is a runtime condition.
+    let (start, end) = (9u64, 4u64);
+    let view = lines.view_range(start..end).unwrap();
+    assert!(view.bytes.is_empty());
 }
 
 // ── TerminatorLog ─────────────────────────────────────────────────────────────

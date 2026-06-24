@@ -21,7 +21,7 @@
 
 use std::{
     ops::Range,
-    sync::{mpsc, Arc},
+    sync::{Arc, mpsc},
 };
 
 use encoding_rs::Encoding;
@@ -391,7 +391,19 @@ impl Buffer {
     ///
     /// [`OffsetMap`]: crate::offset_map::OffsetMap
     pub fn view_range(&self, byte_range: Range<u64>) -> Result<View, BufferError> {
-        let len = byte_range.end.saturating_sub(byte_range.start);
+        // Clamp the requested range to the branch before doing anything else.
+        // A caller that navigates off the end of the file (or passes an
+        // inverted range) must never be able to drive an out-of-bounds read,
+        // fabricate phantom trailing NUL bytes, or trip the ceiling check on a
+        // length larger than the file. `read_at` already short-reads past EOF,
+        // but clamping keeps the allocation, the ceiling check, and the offset
+        // map all sized to bytes that actually exist.
+        let branch_len = self.branch.byte_len();
+        let start = byte_range.start.min(branch_len);
+        let end = byte_range.end.clamp(start, branch_len);
+        let byte_range = start..end;
+        let len = end - start;
+
         if len > self.view_ceiling {
             return Err(BufferError::RangeExceedsCeiling {
                 requested: len,
@@ -399,8 +411,20 @@ impl Buffer {
             });
         }
 
+        // Guard the u64 → usize cast used for the allocation below. On 64-bit
+        // targets this is a no-op (usize == u64); on 32-bit targets it rejects
+        // a range too large to address in memory instead of silently
+        // truncating the buffer size. The reported ceiling is capped at the
+        // platform addressable limit so the `requested > ceiling` invariant
+        // implied by `RangeExceedsCeiling` stays true even when `view_ceiling`
+        // itself is configured above `usize::MAX`.
+        let len_usize = usize::try_from(len).map_err(|_| BufferError::RangeExceedsCeiling {
+            requested: len,
+            ceiling: self.view_ceiling.min(usize::MAX as u64),
+        })?;
+
         // Read the raw source bytes.
-        let mut raw = vec![0u8; len as usize];
+        let mut raw = vec![0u8; len_usize];
         if len > 0 {
             self.branch
                 .read_at(byte_range.start, &mut raw)
@@ -536,7 +560,8 @@ impl Buffer {
         let at_byte = self.line_offset(at)?;
         let term = self.terminator_bytes();
         let fork = self.branch.fork();
-        fork.insert_before(at_byte, &term).map_err(BufferError::Io)?;
+        fork.insert_before(at_byte, &term)
+            .map_err(BufferError::Io)?;
         self.replace_branch(fork);
         Ok(())
     }
