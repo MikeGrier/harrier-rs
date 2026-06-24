@@ -274,13 +274,13 @@ impl Chars {
 
             SyncKind::Utf8 => {
                 let len = self.branch().byte_len();
-                if len == 0 {
-                    // Empty branch: byte 0 is the only (degenerate) boundary.
-                    Ok(0)
-                } else if offset == len {
-                    // EOF position: the nearest boundary at-or-before it is the
-                    // start of the final character (scan back from the last byte).
-                    nearest_utf8_sync(self.branch().as_ref(), len - 1)
+                if offset == len {
+                    // End-of-stream (and the empty-branch case, offset 0 ==
+                    // len 0) is itself a character boundary — consistent with
+                    // `is_boundary` and with the SingleByte/UTF-16 arms, all of
+                    // which return `len` here. Returning `len` directly also
+                    // avoids an out-of-bounds read that scanning would require.
+                    Ok(len)
                 } else {
                     nearest_utf8_sync(self.branch().as_ref(), offset)
                 }

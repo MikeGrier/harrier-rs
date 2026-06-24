@@ -372,13 +372,14 @@ fn utf8_is_boundary_at_and_past_eof_is_true() {
     assert!(empty.is_boundary(0).unwrap());
 }
 
-// 32. nearest_sync_point past EOF clamps to the end and returns the start of the
-//     final character (UTF-8), rather than reading out of bounds.
+// 32. nearest_sync_point at and past EOF clamps to the end-of-stream position,
+//     which is itself a boundary (consistent with is_boundary and the other
+//     encoding arms), rather than reading out of bounds.
 #[test]
-fn utf8_nearest_sync_point_past_eof_returns_last_char_start() {
-    let chars = chars_with_encoding(b"A\xC3\xA9".to_vec(), UTF_8); // 'A'=0, 'é'=1..3
-    assert_eq!(chars.nearest_sync_point(3).unwrap(), 1); // EOF position
-    assert_eq!(chars.nearest_sync_point(9_999).unwrap(), 1); // far past EOF
+fn utf8_nearest_sync_point_at_and_past_eof_returns_eof() {
+    let chars = chars_with_encoding(b"A\xC3\xA9".to_vec(), UTF_8); // "Aé", len 3
+    assert_eq!(chars.nearest_sync_point(3).unwrap(), 3); // EOF position
+    assert_eq!(chars.nearest_sync_point(9_999).unwrap(), 3); // far past EOF clamps to len
 }
 
 // 33. nearest_sync_point at the very beginning of the branch returns 0.
