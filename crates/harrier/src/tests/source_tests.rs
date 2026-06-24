@@ -29,7 +29,7 @@ fn probe_is_well_formed_utf8_tolerates_truncated_tail() {
     assert!(probe_is_well_formed_utf8(&[0xE2, 0x94])); // incomplete box-drawing seq
     assert!(probe_is_well_formed_utf8(&[0xE2]));
     assert!(probe_is_well_formed_utf8(b"")); // empty is valid UTF-8
-    assert!(!probe_is_well_formed_utf8(&[0xE9, b'a'])); // invalid lead byte
+    assert!(!probe_is_well_formed_utf8(&[0xE9, b'a'])); // 0xE9 is a valid 3-byte lead, but 'a' is not a valid continuation byte
 }
 
 // `branch_is_well_formed_utf8` validates the whole stream and rejects invalid
