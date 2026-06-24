@@ -211,10 +211,13 @@ impl Lines {
         // Guard the u64 → usize cast used for the allocations below. On 64-bit
         // targets this is a no-op (usize == u64); on 32-bit targets it rejects
         // a range too large to address in memory instead of silently
-        // truncating the buffer size.
+        // truncating the buffer size. The reported ceiling is capped at the
+        // platform addressable limit so the `requested > ceiling` invariant
+        // implied by `RangeExceedsCeiling` stays true even when `view_ceiling`
+        // itself is configured above `usize::MAX`.
         let len_usize = usize::try_from(len).map_err(|_| LinesError::RangeExceedsCeiling {
             requested: len,
-            ceiling: self.view_ceiling,
+            ceiling: self.view_ceiling.min(usize::MAX as u64),
         })?;
 
         // Read the raw source bytes.
