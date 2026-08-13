@@ -5,6 +5,14 @@ All notable changes to this crate are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0](https://github.com/MikeGrier/harrier-rs/compare/harrier-v0.2.0...harrier-v0.3.0) (2026-08-13)
+
+
+### Features
+
+* bump version to 0.3.0 ([509ed5d](https://github.com/MikeGrier/harrier-rs/commit/509ed5d1392d8db3e5e6c62c3ed5eba74dee767c))
+* trigger release-please for harrier 0.3.0 ([b72a31f](https://github.com/MikeGrier/harrier-rs/commit/b72a31f9dec729a32151953221c7e0594b86c88a))
+
 ## [0.2.0] - 2026-06-23
 
 ### Changed
