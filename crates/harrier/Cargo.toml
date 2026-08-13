@@ -16,7 +16,7 @@ categories = ["text-processing", "parsing"]
 chardetng = "0.1"
 encoding_rs = "0.8"
 mallard = "0.1"
-redwing = "0.3"
+redwing = "0.4"
 regex-syntax = "0.8"
 
 [dev-dependencies]
