@@ -600,7 +600,7 @@ fn termlog_round_trip_through_denormalise() {
     assert_eq!(normalised_all, b"hello\nworld\nfoo\n");
 
     // Re-apply via DenormaliseWriter.
-    let mut dw = DenormaliseWriter::new(Vec::<u8>::new(), log.iter());
+    let mut dw = DenormaliseWriter::new(Vec::<u8>::new(), log.iter(), encoding_rs::UTF_8);
     dw.write_all(&normalised_all).unwrap();
     let restored = dw.finish().unwrap();
 

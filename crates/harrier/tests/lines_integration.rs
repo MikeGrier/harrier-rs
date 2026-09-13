@@ -86,7 +86,7 @@ fn sed_replace(mut lines: Lines, branch_len: u64, pattern: &[u8], replacement: &
 
     let denorm_replacement = {
         let terms = log.iter().skip(pre_newlines).take(match_newlines);
-        let mut dw = DenormaliseWriter::new(Vec::<u8>::new(), terms);
+        let mut dw = DenormaliseWriter::new(Vec::<u8>::new(), terms, UTF_8);
         dw.write_all(replacement).unwrap();
         dw.finish().unwrap()
     };

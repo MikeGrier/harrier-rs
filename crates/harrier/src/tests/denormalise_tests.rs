@@ -14,7 +14,18 @@ use crate::{denormalise::DenormaliseWriter, encoding::LineEnding};
 /// Write `input` through a `DenormaliseWriter` backed by `terminators`, call
 /// `finish`, and return the accumulated output bytes.
 fn run(input: &[u8], terminators: impl Iterator<Item = LineEnding>) -> Vec<u8> {
-    let mut dw = DenormaliseWriter::new(Vec::<u8>::new(), terminators);
+    let mut dw = DenormaliseWriter::new(Vec::<u8>::new(), terminators, encoding_rs::UTF_8);
+    dw.write_all(input).unwrap();
+    dw.finish().unwrap()
+}
+
+/// As [`run`] but in a specific `encoding` (for the UTF-16 code-unit path).
+fn run_enc(
+    input: &[u8],
+    terminators: impl Iterator<Item = LineEnding>,
+    encoding: &'static encoding_rs::Encoding,
+) -> Vec<u8> {
+    let mut dw = DenormaliseWriter::new(Vec::<u8>::new(), terminators, encoding);
     dw.write_all(input).unwrap();
     dw.finish().unwrap()
 }
@@ -200,7 +211,11 @@ fn multi_chunk_write_same_as_single() {
     let single = run(b"a\nb\nc\n", terms(&terminators_single));
 
     // byte-by-byte writes
-    let mut dw = DenormaliseWriter::new(Vec::<u8>::new(), terms(&terminators_chunk));
+    let mut dw = DenormaliseWriter::new(
+        Vec::<u8>::new(),
+        terms(&terminators_chunk),
+        encoding_rs::UTF_8,
+    );
     for &byte in b"a\nb\nc\n" {
         dw.write_all(&[byte]).unwrap();
     }
@@ -227,8 +242,72 @@ fn into_inner_skips_surplus() {
     let mut dw = DenormaliseWriter::new(
         Vec::<u8>::new(),
         terms(&[LineEnding::CrLf, LineEnding::CrLf]),
+        encoding_rs::UTF_8,
     );
     dw.write_all(b"").unwrap(); // 0 newlines written, 2 surplus
     let inner = dw.into_inner();
     assert_eq!(inner, b""); // surplus NOT emitted
+}
+
+// ── UTF-16: LF markers and terminators are code units ────────────────────────
+
+/// UTF-16LE: the LF *code unit* `[0x0A,0x00]` is substituted, and a CRLF
+/// terminator is emitted as the 4-byte unit `[0x0D,0x00,0x0A,0x00]`.
+#[test]
+fn utf16le_lf_units_substituted_with_crlf_units() {
+    // "a\nb\n" in UTF-16LE normalized form.
+    let input = [0x61, 0x00, 0x0A, 0x00, 0x62, 0x00, 0x0A, 0x00];
+    let out = run_enc(
+        &input,
+        terms(&[LineEnding::CrLf, LineEnding::CrLf]),
+        encoding_rs::UTF_16LE,
+    );
+    assert_eq!(
+        out,
+        [
+            0x61, 0x00, 0x0D, 0x00, 0x0A, 0x00, 0x62, 0x00, 0x0D, 0x00, 0x0A, 0x00
+        ]
+    );
+}
+
+/// UTF-16LE: a bare `0x0A` payload byte at an *odd* position (the low half of a
+/// non-LF code unit, e.g. U+010A `[0x0A,0x01]`) must not be mistaken for a
+/// terminator.
+#[test]
+fn utf16le_non_lf_unit_with_0a_byte_is_not_substituted() {
+    let input = [0x0A, 0x01, 0x0A, 0x00]; // U+010A, then LF unit
+    let out = run_enc(&input, terms(&[LineEnding::Cr]), encoding_rs::UTF_16LE);
+    // U+010A passes through; the LF unit becomes a CR unit.
+    assert_eq!(out, [0x0A, 0x01, 0x0D, 0x00]);
+}
+
+/// UTF-16BE: LF unit is `[0x00,0x0A]`; CRLF terminator is `[0x00,0x0D,0x00,0x0A]`.
+#[test]
+fn utf16be_lf_units_substituted() {
+    let input = [0x00, 0x61, 0x00, 0x0A];
+    let out = run_enc(&input, terms(&[LineEnding::CrLf]), encoding_rs::UTF_16BE);
+    assert_eq!(out, [0x00, 0x61, 0x00, 0x0D, 0x00, 0x0A]);
+}
+
+/// UTF-16LE: byte-by-byte writes (splitting code units) yield the same output
+/// as a single write.
+#[test]
+fn utf16le_split_writes_match_single() {
+    let input = [0x61, 0x00, 0x0A, 0x00, 0x62, 0x00, 0x0A, 0x00];
+    let single = run_enc(
+        &input,
+        terms(&[LineEnding::Lf, LineEnding::Lf]),
+        encoding_rs::UTF_16LE,
+    );
+
+    let mut dw = DenormaliseWriter::new(
+        Vec::<u8>::new(),
+        terms(&[LineEnding::Lf, LineEnding::Lf]),
+        encoding_rs::UTF_16LE,
+    );
+    for &b in &input {
+        dw.write_all(&[b]).unwrap();
+    }
+    let chunked = dw.finish().unwrap();
+    assert_eq!(single, chunked);
 }

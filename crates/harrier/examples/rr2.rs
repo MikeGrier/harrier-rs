@@ -388,7 +388,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// infinite repeat of `le`, so every newline in the replacement becomes the
 /// file-native ending.  Non-newline bytes are forwarded verbatim.
 fn denormalise_bytes(norm: &[u8], le: LineEnding) -> Vec<u8> {
-    let mut dw = DenormaliseWriter::new(Vec::with_capacity(norm.len()), std::iter::repeat(le));
+    let mut dw = DenormaliseWriter::new(
+        Vec::with_capacity(norm.len()),
+        std::iter::repeat(le),
+        encoding_rs::UTF_8,
+    );
     // Vec<u8> never returns I/O errors; unwrap is safe.
     dw.write_all(norm).unwrap();
     // into_inner rather than finish: the repeat iterator has no "surplus"

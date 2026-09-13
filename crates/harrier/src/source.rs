@@ -281,6 +281,23 @@ impl Source {
     pub fn as_buffer(self) -> Result<crate::buffer::Buffer, crate::buffer::BufferError> {
         crate::buffer::Buffer::from_source(self)
     }
+
+    /// Convert this `Source` into a [`LineEditor`](crate::line_edit::LineEditor)
+    /// for line-coordinate editing.
+    ///
+    /// Consumes `self`. The editor resolves line ranges to byte spans (with the
+    /// terminator boundary made explicit), encodes replacement text, and
+    /// applies byte splices, returning a new branch. Terminator, end-of-file,
+    /// and multi-edit *policy* is left to the caller — see the
+    /// [`line_edit`](crate::line_edit) module docs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LinesError`](crate::lines::LinesError) if the underlying view
+    /// cannot be materialized.
+    pub fn as_line_editor(self) -> Result<crate::line_edit::LineEditor, crate::lines::LinesError> {
+        crate::line_edit::LineEditor::from_source(self)
+    }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
