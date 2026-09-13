@@ -152,6 +152,19 @@ pub enum LineEditError {
         /// The I/O error kind.
         kind: std::io::ErrorKind,
     },
+    /// The line scan stopped before reaching the end of the branch.
+    ///
+    /// [`crate::lines::Lines`] treats a branch read error as end-of-file
+    /// rather than propagating it, so a truncated scan is otherwise
+    /// indistinguishable from a genuinely short document. `LineEditor`
+    /// detects this by comparing the scanned length against the branch's
+    /// actual byte length.
+    TruncatedScan {
+        /// Source bytes actually covered by the scan.
+        scanned: u64,
+        /// The branch's actual byte length.
+        expected: u64,
+    },
 }
 
 impl std::fmt::Display for LineEditError {
@@ -178,6 +191,10 @@ impl std::fmt::Display for LineEditError {
             ),
             LineEditError::Encode(e) => write!(f, "{e}"),
             LineEditError::Io { kind } => write!(f, "branch splice failed: {kind}"),
+            LineEditError::TruncatedScan { scanned, expected } => write!(
+                f,
+                "line scan covered {scanned} of {expected} source bytes (stopped early, likely an I/O error)"
+            ),
         }
     }
 }
@@ -194,6 +211,22 @@ impl std::error::Error for LineEditError {
 impl From<EncodeError> for LineEditError {
     fn from(e: EncodeError) -> Self {
         LineEditError::Encode(e)
+    }
+}
+
+impl From<LinesError> for LineEditError {
+    /// `LinesError` can't be embedded directly (it wraps `std::io::Error`,
+    /// which isn't `Clone`/`Eq`, unlike `LineEditError`), so it's collapsed
+    /// into the I/O variant. `as_lines()` documents itself as currently
+    /// infallible, so `RangeExceedsCeiling` is unreachable on this path; it's
+    /// still mapped rather than left to panic if that ever changes.
+    fn from(e: LinesError) -> Self {
+        match e {
+            LinesError::Io(io_err) => LineEditError::Io { kind: io_err.kind() },
+            LinesError::RangeExceedsCeiling { .. } => LineEditError::Io {
+                kind: std::io::ErrorKind::Other,
+            },
+        }
     }
 }
 
@@ -231,14 +264,20 @@ impl LineEditor {
     /// Consumes `source`; the resulting editor borrows nothing from it. The
     /// scan is encoding-aware — line terminators are detected in the source's
     /// code units, so UTF-16 is handled correctly.
-    pub fn from_source(source: Source) -> Result<Self, LinesError> {
+    ///
+    /// The branch is forked immediately, before scanning, so the cached line
+    /// map stays valid even if the caller (or another owner of the same
+    /// underlying [`Branch`]) later mutates the branch `from_source` was
+    /// built from: [`Branch::fork`](redwing::Branch::fork) takes an immutable
+    /// snapshot, and mutations to the original are never visible in a fork.
+    pub fn from_source(source: Source) -> Result<Self, LineEditError> {
         let bom_len = source.bom_len() as u64;
         let encoding = source.encoding();
         let line_ending = source.line_ending();
         let unit_size: u64 = if is_utf16(encoding) { 2 } else { 1 };
 
         let lines_iter = source.as_lines()?;
-        let branch = lines_iter.branch();
+        let branch = lines_iter.branch().fork();
         let total_len = branch.byte_len();
 
         let mut lines = Vec::new();
@@ -270,6 +309,18 @@ impl LineEditor {
                 terminated,
             });
             pos = full_end;
+        }
+
+        // Every post-BOM source byte belongs to exactly one line, so a
+        // complete scan always ends with `pos == total_len`. `Lines` treats a
+        // branch read error as end-of-file (see `Lines::refill`), so without
+        // this check a mid-file I/O error would silently yield a truncated
+        // line map instead of surfacing as an error.
+        if pos != total_len {
+            return Err(LineEditError::TruncatedScan {
+                scanned: pos,
+                expected: total_len,
+            });
         }
 
         Ok(LineEditor {
@@ -356,10 +407,13 @@ impl LineEditor {
 
     /// Encode `text` into the document's encoding as **content** bytes.
     ///
-    /// Any `\r\n` or `\r` in `text` is normalised to a single `\n` first, so
-    /// embedded newlines become the encoding's LF code unit rather than a
-    /// mixture. To re-terminate a line with the file's convention, append
-    /// [`terminator`](LineEditor::terminator).
+    /// Any `\r\n` or `\r` in `text` is first normalised to `\n`, then any
+    /// embedded newline is rewritten to the document's own
+    /// [`line_ending`](LineEditor::line_ending) convention (e.g. `\r\n` for a
+    /// CRLF document), so multi-line replacement text can't silently mix
+    /// terminators with the rest of the file. To re-terminate a line at the
+    /// *end* of the replacement, append [`terminator`](LineEditor::terminator)
+    /// separately.
     ///
     /// Returns [`LineEditError::EncodeUnavailable`] for UTF-16 (which has no
     /// `encoding_rs` encoder) and [`LineEditError::Encode`] when a character
@@ -371,7 +425,8 @@ impl LineEditor {
             });
         }
         let normalised = normalise_lf(text);
-        Ok(encode_with(self.encoding, &normalised)?)
+        let converted = apply_line_ending(&normalised, self.line_ending);
+        Ok(encode_with(self.encoding, &converted)?)
     }
 
     /// The source bytes of line-ending `le` in the document's encoding.
@@ -385,10 +440,15 @@ impl LineEditor {
 
     /// Apply a batch of source-space splices to a fork of the branch.
     ///
-    /// Splices must not overlap; they may be supplied in any order. Each
-    /// `replacement` is written verbatim, so the caller is responsible for
-    /// encoding and terminating it (see [`encode_line`](LineEditor::encode_line)
-    /// and [`terminator`](LineEditor::terminator)). `self` is untouched; the
+    /// Splices must not overlap; they may be supplied in any order. Two or
+    /// more zero-width splices anchored at the exact same offset are also
+    /// rejected as overlapping: nothing in the splice itself orders "insert
+    /// X here" relative to "insert Y here" at the same point, so resolving it
+    /// silently by caller-supplied order would violate the "any order"
+    /// guarantee. Each `replacement` is written verbatim, so the caller is
+    /// responsible for encoding and terminating it (see
+    /// [`encode_line`](LineEditor::encode_line) and
+    /// [`terminator`](LineEditor::terminator)). `self` is untouched; the
     /// returned branch is a new fork.
     pub fn apply(&self, splices: &[Splice]) -> Result<Arc<dyn Branch>, LineEditError> {
         let mut ordered: Vec<&Splice> = splices.iter().collect();
@@ -401,9 +461,18 @@ impl LineEditor {
                 });
             }
         }
-        ordered.sort_by_key(|s| s.range.start);
+        // Sort by (start, end) rather than start alone so that splices sharing
+        // a start point (e.g. a zero-width insertion and a replacement both
+        // anchored at the same offset) are ordered deterministically. Relying
+        // on a start-only stable sort would make the overlap check below
+        // depend on the caller-supplied order of same-start splices, which
+        // contradicts the "may be supplied in any order" contract above.
+        ordered.sort_by_key(|s| (s.range.start, s.range.end));
         for pair in ordered.windows(2) {
-            if pair[0].range.end > pair[1].range.start {
+            let both_zero_width_at_same_point = pair[0].range.start == pair[0].range.end
+                && pair[1].range.start == pair[1].range.end
+                && pair[0].range.start == pair[1].range.start;
+            if both_zero_width_at_same_point || pair[0].range.end > pair[1].range.start {
                 return Err(LineEditError::SpliceOverlap {
                     first_end: pair[0].range.end,
                     second_start: pair[1].range.start,
@@ -425,6 +494,16 @@ impl LineEditor {
 /// Whether `encoding` is one of the two UTF-16 variants.
 fn is_utf16(encoding: &'static Encoding) -> bool {
     encoding == encoding_rs::UTF_16LE || encoding == encoding_rs::UTF_16BE
+}
+
+/// Rewrite every `\n` in an already-LF-normalised `text` to the source-byte
+/// representation of `le` (`\n` for `Lf`, `\r` for `Cr`, `\r\n` for `CrLf`).
+fn apply_line_ending(text: &str, le: LineEnding) -> String {
+    match le {
+        LineEnding::Lf => text.to_owned(),
+        LineEnding::Cr => text.replace('\n', "\r"),
+        LineEnding::CrLf => text.replace('\n', "\r\n"),
+    }
 }
 
 /// Normalise `\r\n` and lone `\r` to `\n`.

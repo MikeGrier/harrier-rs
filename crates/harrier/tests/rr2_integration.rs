@@ -115,8 +115,7 @@ fn rr2_run_cfg(
 }
 
 fn denormalise_bytes(norm: &[u8], le: LineEnding) -> Vec<u8> {
-    let mut dw =
-        DenormaliseWriter::new(Vec::with_capacity(norm.len()), std::iter::repeat(le), UTF_8);
+    let mut dw = DenormaliseWriter::new(Vec::with_capacity(norm.len()), std::iter::repeat(le));
     dw.write_all(norm).unwrap();
     dw.into_inner()
 }

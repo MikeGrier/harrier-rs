@@ -429,9 +429,14 @@ impl Lines {
             [0x0A, 0x00]
         };
 
+        // Persisted across refills within this call: bytes before `i` have
+        // already been scanned and confirmed not to start a terminator, so a
+        // refill resumes scanning from `i` instead of rescanning `self.buf`
+        // from the start every time (which would make scanning one very long
+        // or unterminated line quadratic in its length).
+        let mut i = 0;
         loop {
             // ── Scan buf in 2-byte aligned code-unit steps ────────────────
-            let mut i = 0;
             while i + 1 < self.buf.len() {
                 let (b0, b1) = (self.buf[i], self.buf[i + 1]);
 
@@ -531,9 +536,14 @@ impl Iterator for Lines {
             return self.next_utf16(true);
         }
 
+        // Persisted across refills within this call: bytes before `i` have
+        // already been scanned and confirmed not to start a terminator, so a
+        // refill resumes scanning from `i` instead of rescanning `self.buf`
+        // from the start every time (which would make scanning one very long
+        // or unterminated line quadratic in its length).
+        let mut i = 0;
         loop {
             // ── Scan buf for the earliest line terminator ─────────────────
-            let mut i = 0;
             while i < self.buf.len() {
                 match self.buf[i] {
                     b'\r' => {

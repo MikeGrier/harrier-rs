@@ -232,6 +232,73 @@ fn apply_multiple_splices_any_order() {
 }
 
 #[test]
+fn from_source_is_isolated_from_later_mutation_of_shared_branch() {
+    // `from_source` forks an immutable snapshot rather than retaining the
+    // caller's `Arc<dyn Branch>` directly, so a later mutation through
+    // another handle to the same branch must not corrupt the editor's
+    // already-cached line offsets or `apply`'s output.
+    let branch: Arc<dyn Branch> = make_thicket_from_bytes(b"A\nB\nC\n".to_vec()).main();
+    let source = Source::new(Arc::clone(&branch), SourceConfig::default()).unwrap();
+    let ed = source.as_line_editor().unwrap();
+
+    // Mutate the document through the caller's retained handle.
+    branch.insert_before(0, b"Z").unwrap();
+
+    // The cached line map still describes the pre-mutation content, so a
+    // no-op apply must reproduce it exactly rather than reading through
+    // stale offsets into the now-mutated branch.
+    let out = ed.apply(&[]).unwrap();
+    assert_eq!(mat(&out), b"A\nB\nC\n");
+}
+
+#[test]
+fn apply_same_start_splices_are_order_independent() {
+    // A zero-width insertion and a range replacement anchored at the same
+    // offset must produce the same result (and neither be rejected as
+    // overlapping) regardless of the order they're supplied in.
+    let insert = Splice {
+        range: 2..2,
+        replacement: b"X".to_vec(),
+    };
+    let replace = Splice {
+        range: 2..4,
+        replacement: b"Y".to_vec(),
+    };
+
+    let ed = editor(b"A\nB\nC\n");
+    let out_a = ed.apply(&[insert.clone(), replace.clone()]).unwrap();
+    assert_eq!(mat(&out_a), b"A\nXYC\n");
+
+    let ed = editor(b"A\nB\nC\n");
+    let out_b = ed.apply(&[replace, insert]).unwrap();
+    assert_eq!(mat(&out_b), b"A\nXYC\n");
+}
+
+#[test]
+fn apply_two_zero_width_splices_at_same_offset_errors() {
+    // Two zero-width insertions anchored at the exact same offset have no
+    // well-defined relative order, so `apply` rejects them as overlapping
+    // rather than silently resolving them by caller-supplied order.
+    let a = Splice {
+        range: 2..2,
+        replacement: b"X".to_vec(),
+    };
+    let b = Splice {
+        range: 2..2,
+        replacement: b"Y".to_vec(),
+    };
+
+    let ed = editor(b"A\nB\nC\n");
+    let result = ed.apply(&[a.clone(), b.clone()]);
+    assert!(matches!(result, Err(LineEditError::SpliceOverlap { .. })));
+
+    // Same result regardless of input order.
+    let ed = editor(b"A\nB\nC\n");
+    let result = ed.apply(&[b, a]);
+    assert!(matches!(result, Err(LineEditError::SpliceOverlap { .. })));
+}
+
+#[test]
 fn apply_overlap_errors() {
     let ed = editor(b"A\nB\nC\n");
     let result = ed.apply(&[
@@ -266,6 +333,17 @@ fn apply_out_of_bounds_errors() {
 fn encode_line_utf8_normalises_embedded_endings() {
     let ed = editor(b"a\n");
     assert_eq!(ed.encode_line("x\r\ny").unwrap(), b"x\ny");
+}
+
+#[test]
+fn encode_line_respects_crlf_document_for_embedded_newlines() {
+    // A CRLF document must not get mixed terminators: an embedded `\n` in
+    // multi-line replacement text is normalised, then re-terminated with the
+    // document's own convention rather than a hard-coded LF.
+    let ed = editor(b"A\r\nB\r\n");
+    assert_eq!(ed.encode_line("x\ny").unwrap(), b"x\r\ny");
+    // Already-CRLF input round-trips rather than doubling the `\r`.
+    assert_eq!(ed.encode_line("x\r\ny").unwrap(), b"x\r\ny");
 }
 
 #[test]
@@ -439,6 +517,18 @@ fn policy_replace_multiline_text_stays_terminated() {
     let splice = policy_replace(&ed, 1..2, "X\nY").unwrap();
     let out = ed.apply(&[splice]).unwrap();
     assert_eq!(mat(&out), b"A\nX\nY\nC\n");
+}
+
+#[test]
+fn policy_replace_multiline_text_uses_document_terminator() {
+    // Same scenario as `policy_replace_multiline_text_stays_terminated`, but
+    // in a CRLF document: the embedded newline in the replacement must also
+    // become CRLF, not a bare LF, so the whole file stays consistently
+    // terminated.
+    let ed = editor(b"A\r\nB\r\nC\r\n");
+    let splice = policy_replace(&ed, 1..2, "X\nY").unwrap();
+    let out = ed.apply(&[splice]).unwrap();
+    assert_eq!(mat(&out), b"A\r\nX\r\nY\r\nC\r\n");
 }
 
 #[test]

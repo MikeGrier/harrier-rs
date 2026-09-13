@@ -293,9 +293,12 @@ impl Source {
     ///
     /// # Errors
     ///
-    /// Returns [`LinesError`](crate::lines::LinesError) if the underlying view
-    /// cannot be materialized.
-    pub fn as_line_editor(self) -> Result<crate::line_edit::LineEditor, crate::lines::LinesError> {
+    /// Returns [`LineEditError`](crate::line_edit::LineEditError) if the
+    /// underlying scan cannot be materialized (including a truncated scan
+    /// caused by a branch read error).
+    pub fn as_line_editor(
+        self,
+    ) -> Result<crate::line_edit::LineEditor, crate::line_edit::LineEditError> {
         crate::line_edit::LineEditor::from_source(self)
     }
 }

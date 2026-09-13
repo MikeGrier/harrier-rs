@@ -116,11 +116,25 @@ pub struct DenormaliseWriter<W: Write, I: Iterator<Item = LineEnding>> {
 
 impl<W: Write, I: Iterator<Item = LineEnding>> DenormaliseWriter<W, I> {
     /// Create a `DenormaliseWriter` wrapping `inner` and drawing original
+    /// terminators from `terminators`, assuming UTF-8 / single-byte source
+    /// encoding.
+    ///
+    /// `terminators` should yield exactly M items, where M is the number of
+    /// line terminators in the original source region that was replaced.
+    ///
+    /// This is a UTF-8-defaulting shim kept for source compatibility; use
+    /// [`new_with_encoding`](DenormaliseWriter::new_with_encoding) for UTF-16
+    /// sources, where terminators must be emitted as 2-byte code units.
+    pub fn new(inner: W, terminators: I) -> Self {
+        Self::new_with_encoding(inner, terminators, encoding_rs::UTF_8)
+    }
+
+    /// Create a `DenormaliseWriter` wrapping `inner` and drawing original
     /// terminators from `terminators`, emitting in `encoding`'s code units.
     ///
     /// `terminators` should yield exactly M items, where M is the number of
     /// line terminators in the original source region that was replaced.
-    pub fn new(inner: W, terminators: I, encoding: &'static Encoding) -> Self {
+    pub fn new_with_encoding(inner: W, terminators: I, encoding: &'static Encoding) -> Self {
         DenormaliseWriter {
             inner,
             terminators,
@@ -196,8 +210,18 @@ impl<W: Write, I: Iterator<Item = LineEnding>> Write for DenormaliseWriter<W, I>
     ///
     /// Does **not** emit surplus terminators; call [`finish`] for that.
     ///
+    /// A pending half UTF-16 code unit (see [`write`](Self::write)) is
+    /// written out verbatim rather than held, since `flush` must not leave
+    /// previously-accepted bytes unreachable in the destination. This can
+    /// only split a real LF/CR unit's substitution if the caller flushes
+    /// between the two `write` calls that supplied its two bytes — an
+    /// unusual usage pattern for a text stream.
+    ///
     /// [`finish`]: DenormaliseWriter::finish
     fn flush(&mut self) -> io::Result<()> {
+        if let Some(b) = self.pending.take() {
+            self.inner.write_all(&[b])?;
+        }
         self.inner.flush()
     }
 }

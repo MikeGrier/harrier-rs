@@ -302,6 +302,26 @@ fn lone_cr_at_chunk_boundary() {
     assert_eq!(items[1].1, LineTerminator::Ending(LineEnding::Lf));
 }
 
+/// A single line spanning many chunk-boundary refills (CHUNK = 4096) must
+/// still scan correctly. This also guards against reintroducing an O(n^2)
+/// rescan-from-scratch-on-every-refill regression in the scanner: the line
+/// content spans ~20 refills, which a correct incremental scan handles in a
+/// single pass over the buffer.
+#[test]
+fn single_line_spanning_many_chunk_refills() {
+    let mut content: Vec<u8> = b"x".repeat(20 * 4096 + 37);
+    content.push(b'\n');
+    content.extend_from_slice(b"tail\n");
+
+    let items = collect(lines_utf8(content.clone()));
+
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].0, content[..content.len() - 5].to_vec());
+    assert_eq!(items[0].1, LineTerminator::Ending(LineEnding::Lf));
+    assert_eq!(items[1].0, b"tail\n".to_vec());
+    assert_eq!(items[1].1, LineTerminator::Ending(LineEnding::Lf));
+}
+
 // ── Iterator: BOM handling ────────────────────────────────────────────────────
 
 /// 18. UTF-8 BOM is skipped; content starts after BOM bytes.
@@ -600,7 +620,7 @@ fn termlog_round_trip_through_denormalise() {
     assert_eq!(normalised_all, b"hello\nworld\nfoo\n");
 
     // Re-apply via DenormaliseWriter.
-    let mut dw = DenormaliseWriter::new(Vec::<u8>::new(), log.iter(), encoding_rs::UTF_8);
+    let mut dw = DenormaliseWriter::new(Vec::<u8>::new(), log.iter());
     dw.write_all(&normalised_all).unwrap();
     let restored = dw.finish().unwrap();
 

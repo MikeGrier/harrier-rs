@@ -14,7 +14,7 @@ use crate::{denormalise::DenormaliseWriter, encoding::LineEnding};
 /// Write `input` through a `DenormaliseWriter` backed by `terminators`, call
 /// `finish`, and return the accumulated output bytes.
 fn run(input: &[u8], terminators: impl Iterator<Item = LineEnding>) -> Vec<u8> {
-    let mut dw = DenormaliseWriter::new(Vec::<u8>::new(), terminators, encoding_rs::UTF_8);
+    let mut dw = DenormaliseWriter::new(Vec::<u8>::new(), terminators);
     dw.write_all(input).unwrap();
     dw.finish().unwrap()
 }
@@ -25,7 +25,7 @@ fn run_enc(
     terminators: impl Iterator<Item = LineEnding>,
     encoding: &'static encoding_rs::Encoding,
 ) -> Vec<u8> {
-    let mut dw = DenormaliseWriter::new(Vec::<u8>::new(), terminators, encoding);
+    let mut dw = DenormaliseWriter::new_with_encoding(Vec::<u8>::new(), terminators, encoding);
     dw.write_all(input).unwrap();
     dw.finish().unwrap()
 }
@@ -211,11 +211,7 @@ fn multi_chunk_write_same_as_single() {
     let single = run(b"a\nb\nc\n", terms(&terminators_single));
 
     // byte-by-byte writes
-    let mut dw = DenormaliseWriter::new(
-        Vec::<u8>::new(),
-        terms(&terminators_chunk),
-        encoding_rs::UTF_8,
-    );
+    let mut dw = DenormaliseWriter::new(Vec::<u8>::new(), terms(&terminators_chunk));
     for &byte in b"a\nb\nc\n" {
         dw.write_all(&[byte]).unwrap();
     }
@@ -242,7 +238,6 @@ fn into_inner_skips_surplus() {
     let mut dw = DenormaliseWriter::new(
         Vec::<u8>::new(),
         terms(&[LineEnding::CrLf, LineEnding::CrLf]),
-        encoding_rs::UTF_8,
     );
     dw.write_all(b"").unwrap(); // 0 newlines written, 2 surplus
     let inner = dw.into_inner();
@@ -300,7 +295,7 @@ fn utf16le_split_writes_match_single() {
         encoding_rs::UTF_16LE,
     );
 
-    let mut dw = DenormaliseWriter::new(
+    let mut dw = DenormaliseWriter::new_with_encoding(
         Vec::<u8>::new(),
         terms(&[LineEnding::Lf, LineEnding::Lf]),
         encoding_rs::UTF_16LE,
@@ -310,4 +305,22 @@ fn utf16le_split_writes_match_single() {
     }
     let chunked = dw.finish().unwrap();
     assert_eq!(single, chunked);
+}
+
+/// `flush` must not silently withhold a buffered half UTF-16 code unit: after
+/// a successful `flush`, everything written so far (including a pending lone
+/// byte) has to be visible in the underlying writer, per the `Write::flush`
+/// contract.
+#[test]
+fn flush_emits_pending_utf16_half_unit() {
+    let mut dw = DenormaliseWriter::new_with_encoding(
+        Vec::<u8>::new(),
+        terms(&[]),
+        encoding_rs::UTF_16LE,
+    );
+    // Write a single byte: half of a code unit, buffered in `pending`.
+    dw.write_all(&[0x61]).unwrap();
+    dw.flush().unwrap();
+    let inner = dw.into_inner();
+    assert_eq!(inner, [0x61]);
 }
