@@ -123,6 +123,44 @@ fn encode_asymmetry_detection_error() {
     );
 }
 
+// `SourceError::Display` renders a distinct, useful message per variant.
+#[test]
+fn source_error_display_messages() {
+    let io = SourceError::Io(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+    assert_eq!(io.to_string(), "I/O error reading source probe: unexpected end of file");
+
+    let asymmetry = SourceError::EncodeDecodeAsymmetry {
+        encoding_name: "replacement",
+    };
+    assert_eq!(
+        asymmetry.to_string(),
+        "encoding 'replacement' cannot encode text (decode-only encoding)"
+    );
+
+    let detection = SourceError::DetectionFailure;
+    assert_eq!(
+        detection.to_string(),
+        "encoding detection failed to produce a usable result"
+    );
+}
+
+// `SourceError::source()` chains to the wrapped I/O error for `Io`, and is
+// `None` for variants that don't wrap another error.
+#[test]
+fn source_error_source_chains_io_only() {
+    use std::error::Error;
+
+    let io = SourceError::Io(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+    assert!(io.source().is_some());
+
+    let asymmetry = SourceError::EncodeDecodeAsymmetry {
+        encoding_name: "replacement",
+    };
+    assert!(asymmetry.source().is_none());
+
+    assert!(SourceError::DetectionFailure.source().is_none());
+}
+
 // 5. Empty branch (zero bytes): opens successfully; bom_len=0, line_ending=Lf.
 #[test]
 fn zero_byte_branch_succeeds() {
@@ -361,6 +399,35 @@ fn truncated_trailing_sequence_at_probe_boundary_is_still_utf8() {
     assert_eq!(src.encoding(), UTF_8);
 }
 
+// 22a-2byte. Same as above but for a 2-byte lead (0xC2..=0xDF) split at the
+//      probe boundary — `truncated_trailing_sequence_at_probe_boundary_is_still_utf8`
+//      only exercises the 3-byte-lead match arm. The byte immediately after
+//      the completed character is a stray continuation byte (0x80, invalid as
+//      a sequence start): if the peek reads one byte too many (an off-by-one
+//      in how many completion bytes are needed), that poison byte gets
+//      folded into the validated slice and flips the result to `false`.
+#[test]
+fn truncated_2byte_sequence_at_probe_boundary_is_still_utf8() {
+    let mut bytes = vec![b'a'; DEFAULT_PROBE_LEN - 1];
+    bytes.extend_from_slice("é".as_bytes()); // C3 A9 (2-byte)
+    bytes.push(0x80); // poison: stray continuation byte, not a valid sequence start
+    bytes.extend(std::iter::repeat_n(b'a', 64));
+    let src = Source::new(branch(bytes), SourceConfig::default()).unwrap();
+    assert_eq!(src.encoding(), UTF_8);
+}
+
+// 22a-4byte. Same as above but for a 4-byte lead (0xF0..=0xF4) split at the
+//      probe boundary, with the same trailing poison byte.
+#[test]
+fn truncated_4byte_sequence_at_probe_boundary_is_still_utf8() {
+    let mut bytes = vec![b'a'; DEFAULT_PROBE_LEN - 1];
+    bytes.extend_from_slice("😀".as_bytes()); // F0 9F 98 80 (4-byte)
+    bytes.push(0x80); // poison: stray continuation byte, not a valid sequence start
+    bytes.extend(std::iter::repeat_n(b'a', 64));
+    let src = Source::new(branch(bytes), SourceConfig::default()).unwrap();
+    assert_eq!(src.encoding(), UTF_8);
+}
+
 // 22b. A truncated trailing sequence at *true* end-of-file (the probe spans the
 //      whole branch) is malformed UTF-8 and must route through the heuristic —
 //      it must NOT be force-classified UTF-8 by the probe-prefix tolerance.
@@ -439,6 +506,24 @@ fn gate_disabled_uses_pure_heuristic() {
     assert_ne!(src.encoding(), UTF_8);
 }
 
+// 25a. Disabling the gate must actually take effect even for input that IS
+//      valid UTF-8 and free of NUL bytes (dense box-drawing characters,
+//      which chardetng mis-guesses as windows-1252 once the fast path is
+//      bypassed). A gate check weakened from `&&` to `||` would keep taking
+//      the fast path here (since the NUL check alone would still be
+//      satisfied), masking the disabled flag.
+#[test]
+fn gate_disabled_with_valid_utf8_non_ascii_falls_back_to_heuristic() {
+    let s = "─│┌┐└┘".repeat(500);
+    assert!(std::str::from_utf8(s.as_bytes()).is_ok());
+    let config = SourceConfig {
+        prefer_utf8_when_valid: false,
+        ..SourceConfig::default()
+    };
+    let src = Source::new(branch(s.into_bytes()), config).unwrap();
+    assert_ne!(src.encoding(), UTF_8);
+}
+
 // 26. validate_full_stream_utf8 reads the *entire* stream: a late invalid byte
 //     past the probe window is caught by the whole-stream validator, even
 //     though the clean ASCII probe alone is accepted as UTF-8 by default.
@@ -478,3 +563,25 @@ fn full_stream_validation_accepts_clean_utf8() {
     let src = Source::new(branch(bytes), strict).unwrap();
     assert_eq!(src.encoding(), UTF_8);
 }
+
+// 27a. With `validate_full_stream_utf8` at its `false` default, a late
+//      invalid byte past the probe window must NOT affect classification —
+//      the probe alone is trusted, and `branch_is_well_formed_utf8` must not
+//      even be invoked. The probe content here is chosen (dense box-drawing)
+//      so that if the full-stream check ran anyway and (correctly) found the
+//      trailing invalid byte, falling back to the heuristic on this same
+//      probe would visibly flip the result away from UTF-8 — unlike
+//      `full_stream_validation_detects_late_invalid_byte`, whose plain-ASCII
+//      probe heuristically resolves to UTF-8 either way and so cannot catch
+//      a short-circuit that fires unconditionally.
+#[test]
+fn default_config_ignores_late_invalid_byte_past_probe() {
+    let box_pattern = "─│┌┐└┘";
+    let mut bytes = box_pattern.repeat(1000).into_bytes(); // > DEFAULT_PROBE_LEN
+    assert!(bytes.len() as u64 > DEFAULT_PROBE_LEN as u64);
+    bytes.push(0xFF); // invalid UTF-8 byte, past the probe window
+
+    let src = Source::new(branch(bytes), SourceConfig::default()).unwrap();
+    assert_eq!(src.encoding(), UTF_8);
+}
+

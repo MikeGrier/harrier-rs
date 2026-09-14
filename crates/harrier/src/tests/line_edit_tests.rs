@@ -19,6 +19,7 @@ use encoding_rs::{Encoding, UTF_16BE, UTF_16LE, WINDOWS_1252};
 use redwing::{Branch, make_thicket_from_bytes, materialize};
 
 use crate::{
+    encoded::EncodeError,
     encoding::{LineEnding, SourceConfig},
     line_edit::{LineEditError, LineEditor, LineSpan, Splice},
     source::Source,
@@ -66,6 +67,13 @@ fn trailing_terminated_reflects_final_newline() {
     assert!(editor(b"a\nb\n").is_trailing_terminated());
     assert!(!editor(b"a\nb").is_trailing_terminated());
     assert!(!editor(b"").is_trailing_terminated());
+}
+
+#[test]
+fn byte_len_reflects_source_length() {
+    assert_eq!(editor(b"").byte_len(), 0);
+    assert_eq!(editor(b"a\nb\n").byte_len(), 4);
+    assert_eq!(editor(b"a\r\nb\r\n").byte_len(), 6);
 }
 
 // ══ Mechanism: line_span (source coordinates) ════════════════════════════════
@@ -327,7 +335,118 @@ fn apply_out_of_bounds_errors() {
     ));
 }
 
-// ══ Mechanism: encode_line ═══════════════════════════════════════════════════
+#[test]
+fn apply_splice_ending_exactly_at_document_end_is_valid() {
+    // A splice range whose `end` lands exactly on the document's byte
+    // length (touching true EOF) must be accepted, not rejected as
+    // out-of-bounds: only `end > total_len` is invalid.
+    let ed = editor(b"A\nB\n");
+    let span = ed.line_span(1..2).unwrap(); // "B\n", full.end == byte_len() == 4
+    assert_eq!(span.full.end, ed.byte_len());
+    let out = ed
+        .apply(&[Splice {
+            range: span.full,
+            replacement: b"X\n".to_vec(),
+        }])
+        .unwrap();
+    assert_eq!(mat(&out), b"A\nX\n");
+}
+
+// ══ Mechanism: LineEditError / LineEditor Display, Debug, source ═════════════
+
+#[test]
+fn line_edit_error_display_messages() {
+    assert_eq!(
+        LineEditError::LineOutOfRange {
+            index: 3,
+            line_count: 2,
+        }
+        .to_string(),
+        "line index 3 out of range (document has 2 lines)"
+    );
+    assert_eq!(
+        LineEditError::LineRangeInverted { start: 2, end: 1 }.to_string(),
+        "inverted line range 2..1"
+    );
+    assert_eq!(
+        LineEditError::SpliceOutOfBounds {
+            start: 0,
+            end: 99,
+            len: 4,
+        }
+        .to_string(),
+        "splice 0..99 out of bounds (document is 4 bytes)"
+    );
+    assert_eq!(
+        LineEditError::SpliceOverlap {
+            first_end: 4,
+            second_start: 2,
+        }
+        .to_string(),
+        "overlapping splices: 4 > 2"
+    );
+    // Same-point zero-width tie: `first_end == second_start`, so there's no
+    // genuine `>` relation to report — Display must not claim one.
+    assert_eq!(
+        LineEditError::SpliceOverlap {
+            first_end: 2,
+            second_start: 2,
+        }
+        .to_string(),
+        "overlapping splices: two zero-width splices anchored at the same offset (2) \
+         have no defined relative order"
+    );
+    assert_eq!(
+        LineEditError::EncodeUnavailable {
+            encoding_name: "utf-16le",
+        }
+        .to_string(),
+        "encoding 'utf-16le' has no encoder; supply pre-encoded bytes"
+    );
+    assert_eq!(
+        LineEditError::Io {
+            kind: std::io::ErrorKind::Other,
+        }
+        .to_string(),
+        "branch splice failed: other error"
+    );
+    assert_eq!(
+        LineEditError::TruncatedScan {
+            scanned: 4,
+            expected: 6,
+        }
+        .to_string(),
+        "line scan covered 4 of 6 source bytes (stopped early, likely an I/O error)"
+    );
+}
+
+#[test]
+fn line_edit_error_source_chains_encode_only() {
+    use std::error::Error;
+
+    let encode_err = LineEditError::Encode(EncodeError::Unmappable {
+        encoding_name: "windows-1252",
+    });
+    assert!(encode_err.source().is_some());
+
+    assert!(
+        LineEditError::LineOutOfRange {
+            index: 0,
+            line_count: 0,
+        }
+        .source()
+        .is_none()
+    );
+}
+
+#[test]
+fn line_editor_debug_includes_key_fields() {
+    let ed = editor(b"A\nB\nC\n");
+    let debug = format!("{ed:?}");
+    assert!(debug.contains("LineEditor"));
+    assert!(debug.contains("line_count"));
+    assert!(debug.contains('3')); // line_count == 3
+}
 
 #[test]
 fn encode_line_utf8_normalises_embedded_endings() {
@@ -386,6 +505,31 @@ fn utf16le_spans_count_two_byte_code_units() {
         }
     );
 }
+
+#[test]
+fn utf16le_crlf_terminator_is_four_source_bytes() {
+    // BOM + "a\r\nb\r\n" in UTF-16LE: each CRLF terminator is two 2-byte code
+    // units (4 source bytes), not two 1-byte units — a naive `unit_size *
+    // code_unit_count` computed as division instead of multiplication would
+    // still happen to give the right answer for a bare LF (`1 * unit_size ==
+    // unit_size` either way when unit_size == 1) but not here.
+    let mut bytes = vec![0xFF, 0xFE];
+    bytes.extend(u16le("a\r\nb\r\n"));
+    let ed = editor_enc(&bytes, UTF_16LE);
+
+    assert_eq!(ed.line_count(), 2);
+    // Line 0: payload "a" [2,4), CRLF unit [4,8) (4 bytes: CR unit + LF unit).
+    assert_eq!(
+        ed.line_span(0..1).unwrap(),
+        LineSpan {
+            content: 2..4,
+            full: 2..8,
+            terminated: true,
+        }
+    );
+    assert_eq!(ed.byte_len(), 14); // BOM(2) + ("a"=2 + CRLF=4) + ("b"=2 + CRLF=4)
+}
+
 
 #[test]
 fn utf16le_terminator_is_a_code_unit() {

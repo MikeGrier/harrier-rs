@@ -461,6 +461,44 @@ fn view_range_within_custom_ceiling() {
     assert_eq!(view.bytes, b"hello world\n");
 }
 
+/// `DEFAULT_VIEW_CEILING` is exactly 64 MiB.
+#[test]
+fn default_view_ceiling_is_64_mib() {
+    assert_eq!(crate::lines::DEFAULT_VIEW_CEILING, 64 * 1024 * 1024);
+}
+
+/// `LinesError::Display` renders a distinct, useful message per variant.
+#[test]
+fn lines_error_display_messages() {
+    let io = LinesError::Io(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+    assert_eq!(io.to_string(), "I/O error in Lines: unexpected end of file");
+
+    let ceiling = LinesError::RangeExceedsCeiling {
+        requested: 12,
+        ceiling: 5,
+    };
+    assert_eq!(
+        ceiling.to_string(),
+        "byte range (12 bytes) exceeds memory ceiling (5 bytes)"
+    );
+}
+
+/// `LinesError::source()` chains to the wrapped I/O error for `Io`, and is
+/// `None` for variants that don't wrap another error.
+#[test]
+fn lines_error_source_chains_io_only() {
+    use std::error::Error;
+
+    let io = LinesError::Io(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+    assert!(io.source().is_some());
+
+    let ceiling = LinesError::RangeExceedsCeiling {
+        requested: 12,
+        ceiling: 5,
+    };
+    assert!(ceiling.source().is_none());
+}
+
 /// 31a. `view_range` whose end runs past EOF is clamped: it returns exactly the
 ///      real bytes, never fabricated trailing NULs.
 #[test]
@@ -730,6 +768,48 @@ fn utf16le_lone_cr_lines() {
     assert_eq!(items[1].1, LineTerminator::Ending(LineEnding::Cr));
     assert_eq!(decode_utf16le(&items[0].0), "a");
     assert_eq!(decode_utf16le(&items[1].0), "b");
+}
+
+/// UTF-16LE: a lone CR as the very first code unit of the buffer (relative
+/// index 0), immediately followed by more (non-LF) data. Exercises the
+/// "have enough lookahead, decided Cr not CrLf" branch at a buffer offset
+/// other than the coincidental offset 2 used by `utf16le_lone_cr_lines`,
+/// where an off-by-`consume`-arithmetic bug would otherwise go unnoticed.
+#[test]
+fn utf16le_lone_cr_at_buffer_start_followed_by_more_data() {
+    let items = collect(lines_utf16le("\rx"));
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].1, LineTerminator::Ending(LineEnding::Cr));
+    assert_eq!(decode_utf16le(&items[0].0), "");
+    assert_eq!(items[1].1, LineTerminator::End);
+    assert_eq!(decode_utf16le(&items[1].0), "x");
+}
+
+/// UTF-16LE: the entire file is a single lone CR (relative index 0 at true
+/// EOF). Exercises the "CR is the last code unit in the file" branch at a
+/// buffer offset other than the coincidental offset 2.
+#[test]
+fn utf16le_lone_cr_as_entire_file() {
+    let items = collect(lines_utf16le("\r"));
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].1, LineTerminator::Ending(LineEnding::Cr));
+    assert_eq!(decode_utf16le(&items[0].0), "");
+}
+
+/// UTF-16BE: lone CR terminator not followed by LF. Complements
+/// `utf16le_lone_cr_lines`: without this, the BE `next_is_lf` check's `&&`
+/// could be weakened to `||` (misclassifying any code unit with a `0x00`
+/// high byte — i.e. almost every BE ASCII character — as completing a CRLF)
+/// without any test noticing, since the BE CRLF tests never have a
+/// non-LF byte immediately after a CR.
+#[test]
+fn utf16be_lone_cr_lines() {
+    let items = collect(lines_utf16be("a\rb\r"));
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].1, LineTerminator::Ending(LineEnding::Cr));
+    assert_eq!(items[1].1, LineTerminator::Ending(LineEnding::Cr));
+    assert_eq!(decode_utf16be(&items[0].0), "a");
+    assert_eq!(decode_utf16be(&items[1].0), "b");
 }
 
 /// 46. UTF-16LE: non-ASCII Unicode character (proves decode, not byte-scan).

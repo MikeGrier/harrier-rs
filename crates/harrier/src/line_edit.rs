@@ -54,7 +54,7 @@ use crate::{
     denormalise::line_ending_bytes,
     encoded::{EncodeError, encode_with},
     encoding::LineEnding,
-    lines::{LineTerminator, LinesError},
+    lines::{LineTerminator, Lines, LinesError},
     source::Source,
 };
 
@@ -127,7 +127,10 @@ pub enum LineEditError {
         /// The document's source byte length.
         len: u64,
     },
-    /// Two splices in the same [`apply`](LineEditor::apply) batch overlapped.
+    /// Two splices in the same [`apply`](LineEditor::apply) batch overlapped —
+    /// including two zero-width splices anchored at the exact same offset,
+    /// where `first_end == second_start` (there is no genuine `>` relation;
+    /// [`Display`](std::fmt::Display) reports that case with its own wording).
     SpliceOverlap {
         /// End of the earlier splice.
         first_end: u64,
@@ -184,7 +187,17 @@ impl std::fmt::Display for LineEditError {
             LineEditError::SpliceOverlap {
                 first_end,
                 second_start,
-            } => write!(f, "overlapping splices: {first_end} > {second_start}"),
+            } => {
+                if first_end == second_start {
+                    write!(
+                        f,
+                        "overlapping splices: two zero-width splices anchored at the \
+                         same offset ({first_end}) have no defined relative order"
+                    )
+                } else {
+                    write!(f, "overlapping splices: {first_end} > {second_start}")
+                }
+            }
             LineEditError::EncodeUnavailable { encoding_name } => write!(
                 f,
                 "encoding '{encoding_name}' has no encoder; supply pre-encoded bytes"
@@ -265,23 +278,34 @@ impl LineEditor {
     /// scan is encoding-aware — line terminators are detected in the source's
     /// code units, so UTF-16 is handled correctly.
     ///
-    /// The branch is forked immediately, before scanning, so the cached line
-    /// map stays valid even if the caller (or another owner of the same
-    /// underlying [`Branch`]) later mutates the branch `from_source` was
-    /// built from: [`Branch::fork`](redwing::Branch::fork) takes an immutable
-    /// snapshot, and mutations to the original are never visible in a fork.
+    /// The branch is forked *before* scanning, and the scan itself runs
+    /// against that fork (not the original `source` branch), so the cached
+    /// line map and the scan are guaranteed to observe exactly the same
+    /// bytes. [`Branch::fork`] takes an immutable
+    /// snapshot; mutations to the original — through the caller's retained
+    /// handle, or through any other owner of the same underlying
+    /// [`Branch`] — are never visible in a fork, including any mutation
+    /// that might otherwise race with the scan itself.
+    ///
+    /// This only protects the fork-and-scan step itself. `source`'s
+    /// `encoding`, `bom_len`, and `line_ending` were already resolved when
+    /// `source` was opened (see the [`Source`] invariant); mutating the
+    /// branch before calling `from_source` can still desync that metadata
+    /// from the bytes this fork actually scans.
     pub fn from_source(source: Source) -> Result<Self, LineEditError> {
-        let bom_len = source.bom_len() as u64;
+        let bom_len = source.bom_len();
         let encoding = source.encoding();
         let line_ending = source.line_ending();
         let unit_size: u64 = if is_utf16(encoding) { 2 } else { 1 };
 
-        let lines_iter = source.as_lines()?;
-        let branch = lines_iter.branch().fork();
+        // Fork first, then scan the fork itself (not `source`'s branch), so
+        // nothing can observe the two disagreeing.
+        let branch = source.branch().fork();
         let total_len = branch.byte_len();
+        let lines_iter = Lines::from_parts(Arc::clone(&branch), encoding, line_ending, bom_len);
 
         let mut lines = Vec::new();
-        let mut pos = bom_len;
+        let mut pos = bom_len as u64;
         for (content, term) in lines_iter {
             let content_len = content.len() as u64;
             let (payload_len, source_term_len, terminated) = match term {

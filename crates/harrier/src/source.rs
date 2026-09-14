@@ -87,6 +87,21 @@ impl From<std::io::Error> for SourceError {
 /// All of these steps happen once at open time so that the downstream types
 /// (`Chars`, `Lines`, `Buffer`) receive a fully-resolved encoding and line-
 /// ending policy without repeating the probe work.
+///
+/// # Invariant: the branch must not be mutated between opening and consuming
+///
+/// `encoding`, `bom_len`, and `line_ending` are resolved once, at
+/// [`Source::new`], and never re-probed. `Source` (and everything built from
+/// it — [`Chars`](crate::chars::Chars), [`Lines`](crate::lines::Lines),
+/// [`Buffer`](crate::buffer::Buffer), and
+/// [`LineEditor`](crate::line_edit::LineEditor)) assumes the branch's content
+/// is unchanged from the moment of that probe until the `Source` is consumed
+/// (via one of the `as_*` methods) and, for scan-based consumers, until the
+/// scan completes. Mutating the branch through another retained handle in
+/// that window can desync the frozen metadata from what is actually scanned
+/// — for example, changing the dominant line ending after `Source::new` does
+/// not update `line_ending()`. Open a `Source` and consume it promptly,
+/// without an intervening mutation, to keep this invariant.
 pub struct Source {
     /// The underlying byte-stream.
     branch: Arc<dyn Branch>,
@@ -106,6 +121,9 @@ impl Source {
     ///
     /// `config` controls how the probe is performed; see [`SourceConfig`]
     /// for field-level documentation.
+    ///
+    /// See the [`Source`] type documentation for the invariant that the
+    /// branch must not be mutated between opening and consuming it.
     ///
     /// # Errors
     ///

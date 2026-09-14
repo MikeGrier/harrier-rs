@@ -307,20 +307,43 @@ fn utf16le_split_writes_match_single() {
     assert_eq!(single, chunked);
 }
 
-/// `flush` must not silently withhold a buffered half UTF-16 code unit: after
-/// a successful `flush`, everything written so far (including a pending lone
-/// byte) has to be visible in the underlying writer, per the `Write::flush`
-/// contract.
+/// `flush` errors (rather than silently succeeding or emitting) while a half
+/// UTF-16 code unit is buffered — it cannot be safely flushed without either
+/// lying about what reached the destination or desyncing subsequent
+/// code-unit alignment. The byte itself is preserved: a later `write`
+/// supplying its other half still completes it correctly.
 #[test]
-fn flush_emits_pending_utf16_half_unit() {
+fn flush_errors_while_utf16_half_unit_pending_but_preserves_it() {
+    let mut dw = DenormaliseWriter::new_with_encoding(
+        Vec::<u8>::new(),
+        terms(&[LineEnding::CrLf]),
+        encoding_rs::UTF_16LE,
+    );
+    dw.write_all(&[0x41]).unwrap(); // 'A' low byte: half a code unit, buffered
+    let err = dw.flush().unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+
+    // The pending byte survived the failed flush and is still completed
+    // correctly by a later write, with no alignment shift.
+    // Completing byte of 'A', then an LF unit, then 'B'.
+    dw.write_all(&[0x00, 0x0A, 0x00, 0x42, 0x00]).unwrap();
+    let out = dw.finish().unwrap();
+    // "A" + CRLF (substituted for the LF marker) + "B", all correctly
+    // code-unit-aligned.
+    assert_eq!(out, [0x41, 0x00, 0x0D, 0x00, 0x0A, 0x00, 0x42, 0x00]);
+}
+
+/// A `flush` with nothing pending is a no-op beyond flushing the inner
+/// writer; a subsequent `into_inner` still returns everything written so far.
+#[test]
+fn flush_with_no_pending_is_a_clean_no_op() {
     let mut dw = DenormaliseWriter::new_with_encoding(
         Vec::<u8>::new(),
         terms(&[]),
         encoding_rs::UTF_16LE,
     );
-    // Write a single byte: half of a code unit, buffered in `pending`.
-    dw.write_all(&[0x61]).unwrap();
+    dw.write_all(&[0x41, 0x00]).unwrap(); // one full code unit, nothing pending
     dw.flush().unwrap();
     let inner = dw.into_inner();
-    assert_eq!(inner, [0x61]);
+    assert_eq!(inner, [0x41, 0x00]);
 }

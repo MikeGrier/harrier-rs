@@ -171,7 +171,9 @@ impl<W: Write, I: Iterator<Item = LineEnding>> DenormaliseWriter<W, I> {
     ///
     /// Prefer [`finish`] in almost all cases.  Use this only when you are
     /// certain M ≤ N and no surplus terminators exist, or when you are
-    /// intentionally discarding them.
+    /// intentionally discarding them. This also silently drops a pending
+    /// half UTF-16 code unit, if one is buffered (see [`write`](Self::write))
+    /// — [`finish`] emits it instead.
     ///
     /// [`finish`]: DenormaliseWriter::finish
     pub fn into_inner(self) -> W {
@@ -210,17 +212,27 @@ impl<W: Write, I: Iterator<Item = LineEnding>> Write for DenormaliseWriter<W, I>
     ///
     /// Does **not** emit surplus terminators; call [`finish`] for that.
     ///
-    /// A pending half UTF-16 code unit (see [`write`](Self::write)) is
-    /// written out verbatim rather than held, since `flush` must not leave
-    /// previously-accepted bytes unreachable in the destination. This can
-    /// only split a real LF/CR unit's substitution if the caller flushes
-    /// between the two `write` calls that supplied its two bytes — an
-    /// unusual usage pattern for a text stream.
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::InvalidInput`](io::ErrorKind::InvalidInput) if a
+    /// half UTF-16 code unit is currently buffered (see
+    /// [`write`](Self::write)). It cannot be flushed: it is one byte of an
+    /// incomplete 2-byte code unit, so its role (part of an LF/CR marker or
+    /// an ordinary character) is still unknown, and emitting it early would
+    /// desync every later code-unit comparison in the stream, since a `write`
+    /// always assumes it starts at a code-unit boundary. The byte is *not*
+    /// lost — it stays buffered exactly as before the call — so a
+    /// subsequent `write` supplying its other half, or [`finish`] once no
+    /// more matching byte is coming, still completes it correctly.
     ///
     /// [`finish`]: DenormaliseWriter::finish
     fn flush(&mut self) -> io::Result<()> {
-        if let Some(b) = self.pending.take() {
-            self.inner.write_all(&[b])?;
+        if self.pending.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "DenormaliseWriter: cannot flush with a pending half UTF-16 code unit \
+                 buffered; write its completing byte, or call `finish`, first",
+            ));
         }
         self.inner.flush()
     }

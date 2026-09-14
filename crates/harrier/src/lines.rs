@@ -143,6 +143,23 @@ impl Lines {
         let encoding = source.encoding();
         let line_ending = source.line_ending();
         let branch = source.branch();
+        Self::from_parts(branch, encoding, line_ending, bom_len)
+    }
+
+    /// Construct a `Lines` directly from an explicit branch and already-known
+    /// metadata, bypassing `Source`.
+    ///
+    /// Used by [`crate::line_edit::LineEditor::from_source`], which forks an
+    /// immutable snapshot of the branch *before* scanning so that the cached
+    /// line map and the scan itself are guaranteed to observe exactly the
+    /// same bytes — going through [`Source::as_lines`] would scan the
+    /// original (still-mutable, caller-shared) branch instead of the fork.
+    pub(crate) fn from_parts(
+        branch: Arc<dyn Branch>,
+        encoding: &'static Encoding,
+        line_ending: LineEnding,
+        bom_len: usize,
+    ) -> Self {
         Lines {
             branch,
             encoding,
