@@ -5,6 +5,14 @@ All notable changes to this crate are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1](https://github.com/MikeGrier/harrier-rs/compare/harrier-v0.3.0...harrier-v0.3.1) (2026-09-14)
+
+
+### Bug Fixes
+
+* address further LineEditor/DenormaliseWriter review findings ([f8d7272](https://github.com/MikeGrier/harrier-rs/commit/f8d7272395a5afe249379ab1158a92afac3cb19e))
+* address LineEditor/DenormaliseWriter review findings ([c37c06c](https://github.com/MikeGrier/harrier-rs/commit/c37c06c83b37e20784bcf8c6647e8eee4401080a))
+
 ## [0.3.0](https://github.com/MikeGrier/harrier-rs/compare/harrier-v0.2.0...harrier-v0.3.0) (2026-08-13)
 
 
