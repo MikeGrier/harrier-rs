@@ -9,6 +9,7 @@ mod buffer_tests;
 mod chars_tests;
 mod denormalise_tests;
 mod encoding_tests;
+mod line_edit_tests;
 mod line_map_tests;
 mod lines_tests;
 mod mallard_bridge_tests;

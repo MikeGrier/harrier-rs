@@ -6,6 +6,7 @@ pub mod denormalise;
 pub mod encoded;
 pub mod encoding;
 pub mod line_count;
+pub mod line_edit;
 pub mod line_map;
 pub mod line_map_event;
 pub mod line_map_segment;

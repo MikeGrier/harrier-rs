@@ -143,6 +143,23 @@ impl Lines {
         let encoding = source.encoding();
         let line_ending = source.line_ending();
         let branch = source.branch();
+        Self::from_parts(branch, encoding, line_ending, bom_len)
+    }
+
+    /// Construct a `Lines` directly from an explicit branch and already-known
+    /// metadata, bypassing `Source`.
+    ///
+    /// Used by [`crate::line_edit::LineEditor::from_source`], which forks an
+    /// immutable snapshot of the branch *before* scanning so that the cached
+    /// line map and the scan itself are guaranteed to observe exactly the
+    /// same bytes — going through [`Source::as_lines`] would scan the
+    /// original (still-mutable, caller-shared) branch instead of the fork.
+    pub(crate) fn from_parts(
+        branch: Arc<dyn Branch>,
+        encoding: &'static Encoding,
+        line_ending: LineEnding,
+        bom_len: usize,
+    ) -> Self {
         Lines {
             branch,
             encoding,
@@ -429,9 +446,14 @@ impl Lines {
             [0x0A, 0x00]
         };
 
+        // Persisted across refills within this call: bytes before `i` have
+        // already been scanned and confirmed not to start a terminator, so a
+        // refill resumes scanning from `i` instead of rescanning `self.buf`
+        // from the start every time (which would make scanning one very long
+        // or unterminated line quadratic in its length).
+        let mut i = 0;
         loop {
             // ── Scan buf in 2-byte aligned code-unit steps ────────────────
-            let mut i = 0;
             while i + 1 < self.buf.len() {
                 let (b0, b1) = (self.buf[i], self.buf[i + 1]);
 
@@ -531,9 +553,14 @@ impl Iterator for Lines {
             return self.next_utf16(true);
         }
 
+        // Persisted across refills within this call: bytes before `i` have
+        // already been scanned and confirmed not to start a terminator, so a
+        // refill resumes scanning from `i` instead of rescanning `self.buf`
+        // from the start every time (which would make scanning one very long
+        // or unterminated line quadratic in its length).
+        let mut i = 0;
         loop {
             // ── Scan buf for the earliest line terminator ─────────────────
-            let mut i = 0;
             while i < self.buf.len() {
                 match self.buf[i] {
                     b'\r' => {

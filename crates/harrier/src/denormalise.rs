@@ -33,25 +33,57 @@
 
 use std::io::{self, Write};
 
+use encoding_rs::Encoding;
+
 use crate::encoding::LineEnding;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-/// Write the byte sequence that represents `le` to `w`.
+/// The raw bytes of `le` in `encoding`'s code units.
 ///
-/// | Variant | Bytes written |
-/// |---|---|
-/// | [`LineEnding::Lf`]   | `\n` |
-/// | [`LineEnding::CrLf`] | `\r\n` |
-/// | [`LineEnding::Cr`]   | `\r` |
+/// This is the single source of truth for terminator *bytes* across harrier.
+/// Single-byte and UTF-8 encodings use one byte per unit; UTF-16LE/BE use two,
+/// so e.g. a CRLF terminator is four bytes there
+/// (`[0x0D,0x00,0x0A,0x00]` for LE). Byte order follows the encoding.
 ///
-/// This is the canonical place to convert a `LineEnding` discriminant to its
-/// raw bytes.  Changing the byte sequences emitted here is a breaking change.
-pub(crate) fn write_line_ending(w: &mut impl Write, le: LineEnding) -> io::Result<()> {
-    match le {
-        LineEnding::Lf => w.write_all(b"\n"),
-        LineEnding::CrLf => w.write_all(b"\r\n"),
-        LineEnding::Cr => w.write_all(b"\r"),
+/// Changing the units emitted here is a breaking change.
+pub(crate) fn line_ending_bytes(le: LineEnding, encoding: &'static Encoding) -> Vec<u8> {
+    // The terminator as ASCII code points; widened to code units below.
+    let ascii: &[u8] = match le {
+        LineEnding::Lf => b"\n",
+        LineEnding::CrLf => b"\r\n",
+        LineEnding::Cr => b"\r",
+    };
+    if encoding == encoding_rs::UTF_16LE {
+        ascii.iter().flat_map(|&b| [b, 0x00]).collect()
+    } else if encoding == encoding_rs::UTF_16BE {
+        ascii.iter().flat_map(|&b| [0x00, b]).collect()
+    } else {
+        ascii.to_vec()
+    }
+}
+
+/// Write the byte sequence that represents `le` in `encoding` to `w`.
+///
+/// Delegates to [`line_ending_bytes`] so single-byte and UTF-16 terminators are
+/// produced from one place.
+pub(crate) fn write_line_ending(
+    w: &mut impl Write,
+    le: LineEnding,
+    encoding: &'static Encoding,
+) -> io::Result<()> {
+    w.write_all(&line_ending_bytes(le, encoding))
+}
+
+/// Whether `encoding` is a two-byte-per-unit UTF-16 encoding; `Some(true)` for
+/// little-endian, `Some(false)` for big-endian, `None` for single-byte / UTF-8.
+fn utf16_le(encoding: &'static Encoding) -> Option<bool> {
+    if encoding == encoding_rs::UTF_16LE {
+        Some(true)
+    } else if encoding == encoding_rs::UTF_16BE {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -74,16 +106,41 @@ pub struct DenormaliseWriter<W: Write, I: Iterator<Item = LineEnding>> {
     inner: W,
     /// Iterator of original line terminators from the terminator log.
     terminators: I,
+    /// The output encoding, so LF *markers* are recognized and terminators
+    /// emitted as code units (one byte for single-byte/UTF-8, two for UTF-16).
+    encoding: &'static Encoding,
+    /// UTF-16 only: a single leftover byte when a `write` ended mid-code-unit,
+    /// completed by the first byte of the next `write`.
+    pending: Option<u8>,
 }
 
 impl<W: Write, I: Iterator<Item = LineEnding>> DenormaliseWriter<W, I> {
     /// Create a `DenormaliseWriter` wrapping `inner` and drawing original
-    /// terminators from `terminators`.
+    /// terminators from `terminators`, assuming UTF-8 / single-byte source
+    /// encoding.
     ///
     /// `terminators` should yield exactly M items, where M is the number of
     /// line terminators in the original source region that was replaced.
+    ///
+    /// This is a UTF-8-defaulting shim kept for source compatibility; use
+    /// [`new_with_encoding`](DenormaliseWriter::new_with_encoding) for UTF-16
+    /// sources, where terminators must be emitted as 2-byte code units.
     pub fn new(inner: W, terminators: I) -> Self {
-        DenormaliseWriter { inner, terminators }
+        Self::new_with_encoding(inner, terminators, encoding_rs::UTF_8)
+    }
+
+    /// Create a `DenormaliseWriter` wrapping `inner` and drawing original
+    /// terminators from `terminators`, emitting in `encoding`'s code units.
+    ///
+    /// `terminators` should yield exactly M items, where M is the number of
+    /// line terminators in the original source region that was replaced.
+    pub fn new_with_encoding(inner: W, terminators: I, encoding: &'static Encoding) -> Self {
+        DenormaliseWriter {
+            inner,
+            terminators,
+            encoding,
+            pending: None,
+        }
     }
 
     /// Emit any terminators remaining in `I` (the M > N case) and return the
@@ -98,8 +155,13 @@ impl<W: Write, I: Iterator<Item = LineEnding>> DenormaliseWriter<W, I> {
     /// surplus terminator.  The inner writer is consumed regardless; any
     /// partially-written output is not rolled back.
     pub fn finish(mut self) -> io::Result<W> {
+        // A leftover half code unit is malformed input; emit it rather than
+        // silently drop it.
+        if let Some(b) = self.pending.take() {
+            self.inner.write_all(&[b])?;
+        }
         for le in self.terminators.by_ref() {
-            write_line_ending(&mut self.inner, le)?;
+            write_line_ending(&mut self.inner, le, self.encoding)?;
         }
         Ok(self.inner)
     }
@@ -109,7 +171,9 @@ impl<W: Write, I: Iterator<Item = LineEnding>> DenormaliseWriter<W, I> {
     ///
     /// Prefer [`finish`] in almost all cases.  Use this only when you are
     /// certain M ≤ N and no surplus terminators exist, or when you are
-    /// intentionally discarding them.
+    /// intentionally discarding them. This also silently drops a pending
+    /// half UTF-16 code unit, if one is buffered (see [`write`](Self::write))
+    /// — [`finish`] emits it instead.
     ///
     /// [`finish`]: DenormaliseWriter::finish
     pub fn into_inner(self) -> W {
@@ -120,45 +184,26 @@ impl<W: Write, I: Iterator<Item = LineEnding>> DenormaliseWriter<W, I> {
 // ── MA-31: Write impl ─────────────────────────────────────────────────────────
 
 impl<W: Write, I: Iterator<Item = LineEnding>> Write for DenormaliseWriter<W, I> {
-    /// Write `buf` to the underlying writer, substituting each `\n` byte with
-    /// the next terminator from `I`.
+    /// Write `buf`, substituting each LF *marker* with the next terminator from
+    /// `I` (as code units in the output encoding), passing everything else
+    /// through.
     ///
     /// ## M-vs-N terminator preservation rule
     ///
-    /// - If `I` still has items when an `\n` is encountered, the `\n` is
-    ///   replaced by the next terminator from `I` (which may itself be `\n`
-    ///   for LF-sourced lines, `\r\n` for CRLF, or `\r` for CR).
-    /// - If `I` is exhausted (M < N case), remaining `\n`s are written as
-    ///   plain `\n`.
+    /// - If `I` still has items when an LF marker is encountered, it is replaced
+    ///   by the next terminator from `I` (which may itself be an LF, a CRLF, or
+    ///   a CR, in the encoding's code units).
+    /// - If `I` is exhausted (M < N case), remaining LF markers are written
+    ///   verbatim.
     ///
-    /// Non-`\n` bytes are forwarded verbatim.
-    ///
-    /// Returns the number of bytes consumed from `buf` (always `buf.len()`
-    /// on success; partial writes only occur when the underlying writer
-    /// returns an error).
+    /// For single-byte / UTF-8 output the LF marker is the byte `0x0A`. For
+    /// UTF-16 it is the LF *code unit* (`[0x0A,0x00]` LE, `[0x00,0x0A]` BE);
+    /// scanning is 2-byte aligned, and a `write` that ends mid-unit buffers the
+    /// half unit until the next `write` (see [`pending`](Self::pending)).
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mut i = 0;
-        while i < buf.len() {
-            // Find the next `\n` in the remaining slice.
-            match buf[i..].iter().position(|&b| b == b'\n') {
-                None => {
-                    // No more newlines — forward the rest verbatim.
-                    self.inner.write_all(&buf[i..])?;
-                    i = buf.len();
-                }
-                Some(rel) => {
-                    // Write the non-newline prefix (may be empty).
-                    if rel > 0 {
-                        self.inner.write_all(&buf[i..i + rel])?;
-                    }
-                    // Substitute or pass through the `\n`.
-                    match self.terminators.next() {
-                        Some(le) => write_line_ending(&mut self.inner, le)?,
-                        None => self.inner.write_all(b"\n")?,
-                    }
-                    i += rel + 1; // advance past the `\n`
-                }
-            }
+        match utf16_le(self.encoding) {
+            None => self.write_single_byte(buf)?,
+            Some(le) => self.write_utf16(buf, le)?,
         }
         Ok(buf.len())
     }
@@ -167,8 +212,94 @@ impl<W: Write, I: Iterator<Item = LineEnding>> Write for DenormaliseWriter<W, I>
     ///
     /// Does **not** emit surplus terminators; call [`finish`] for that.
     ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::InvalidInput`](io::ErrorKind::InvalidInput) if a
+    /// half UTF-16 code unit is currently buffered (see
+    /// [`write`](Self::write)). It cannot be flushed: it is one byte of an
+    /// incomplete 2-byte code unit, so its role (part of an LF/CR marker or
+    /// an ordinary character) is still unknown, and emitting it early would
+    /// desync every later code-unit comparison in the stream, since a `write`
+    /// always assumes it starts at a code-unit boundary. The byte is *not*
+    /// lost — it stays buffered exactly as before the call — so a
+    /// subsequent `write` supplying its other half, or [`finish`] once no
+    /// more matching byte is coming, still completes it correctly.
+    ///
     /// [`finish`]: DenormaliseWriter::finish
     fn flush(&mut self) -> io::Result<()> {
+        if self.pending.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "DenormaliseWriter: cannot flush with a pending half UTF-16 code unit \
+                 buffered; write its completing byte, or call `finish`, first",
+            ));
+        }
         self.inner.flush()
+    }
+}
+
+impl<W: Write, I: Iterator<Item = LineEnding>> DenormaliseWriter<W, I> {
+    /// Single-byte / UTF-8 substitution: replace each `0x0A` byte.
+    fn write_single_byte(&mut self, buf: &[u8]) -> io::Result<()> {
+        let mut i = 0;
+        while i < buf.len() {
+            match buf[i..].iter().position(|&b| b == b'\n') {
+                None => {
+                    self.inner.write_all(&buf[i..])?;
+                    i = buf.len();
+                }
+                Some(rel) => {
+                    if rel > 0 {
+                        self.inner.write_all(&buf[i..i + rel])?;
+                    }
+                    match self.terminators.next() {
+                        Some(le) => write_line_ending(&mut self.inner, le, self.encoding)?,
+                        None => self.inner.write_all(b"\n")?,
+                    }
+                    i += rel + 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// UTF-16 substitution: replace each LF *code unit*, 2-byte aligned, with a
+    /// leftover half-unit carried across `write` calls in `pending`.
+    fn write_utf16(&mut self, buf: &[u8], le: bool) -> io::Result<()> {
+        let lf_unit: [u8; 2] = if le { [0x0A, 0x00] } else { [0x00, 0x0A] };
+        let mut idx = 0;
+
+        // Complete a half unit left over from the previous write.
+        if let Some(first) = self.pending.take() {
+            if buf.is_empty() {
+                self.pending = Some(first);
+                return Ok(());
+            }
+            self.emit_unit([first, buf[0]], lf_unit)?;
+            idx = 1;
+        }
+
+        while idx + 2 <= buf.len() {
+            self.emit_unit([buf[idx], buf[idx + 1]], lf_unit)?;
+            idx += 2;
+        }
+        if idx < buf.len() {
+            self.pending = Some(buf[idx]);
+        }
+        Ok(())
+    }
+
+    /// Emit one UTF-16 code unit, substituting an LF unit with the next
+    /// terminator (or passing it through when `I` is exhausted).
+    fn emit_unit(&mut self, unit: [u8; 2], lf_unit: [u8; 2]) -> io::Result<()> {
+        if unit == lf_unit {
+            match self.terminators.next() {
+                Some(le) => write_line_ending(&mut self.inner, le, self.encoding)?,
+                None => self.inner.write_all(&unit)?,
+            }
+        } else {
+            self.inner.write_all(&unit)?;
+        }
+        Ok(())
     }
 }
